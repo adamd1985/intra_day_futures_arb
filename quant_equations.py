@@ -86,6 +86,9 @@ def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
     return sharpe_ratio * factor
 
 def deflated_sharpe_ratio(SR, T, skew, kurt, SRs, N):
+    if SR < 0:
+        # CDF of close to 0 is 0.5, making the DSF look good.
+        return SR
     mu_SR = np.mean(SRs)
     sigma_SR = np.std(SRs)
 
