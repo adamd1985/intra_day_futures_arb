@@ -65,12 +65,7 @@ def var_ratio(df, col, k=100):
 
     return vr, ts1, p_value1, ts2, p_value2
 
-
-def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
-    mean_rets = rets.mean()
-    std_rets = rets.std()
-
-    sharpe_ratio = (mean_rets - risk_free / 252) / std_rets
+def get_annualized_factor(period=YFinanceOptions.M15):
     factor = 0.
 
     if period == YFinanceOptions.M1:
@@ -83,6 +78,14 @@ def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
         factor = np.sqrt(252)
     else:
         raise ValueError("Unsupported period.")
+    return factor
+
+def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
+    mean_rets = rets.mean()
+    std_rets = rets.std()
+
+    sharpe_ratio = (mean_rets - risk_free / 252) / std_rets
+    factor = get_annualized_factor(period)
     return sharpe_ratio * factor
 
 def deflated_sharpe_ratio(SR, T, skew, kurt, SRs, N):
