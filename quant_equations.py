@@ -26,6 +26,16 @@ def get_ou(df, col):
 
     return hl, h
 
+def modulate_std (hurst, base_std=2.0, adjustment=0.5):
+    if hurst < 0.5:
+        # Reverting, increase this band
+        return base_std + (0.5 - hurst) * adjustment
+    elif hurst > 0.5:
+        # Trending, decrease band
+        return base_std - (hurst - 0.5) * adjustment
+    else:
+        return base_std
+
 def var_ratio(df, col, k=100):
     # https://mingze-gao.com/posts/lomackinlay1988/#source-code
     log_prices = np.log(df[col])
