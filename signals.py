@@ -1,33 +1,36 @@
 import pandas as pd
 import numpy as np
 
-def signal_bollinger_bands(price_df, target_col, window, std_factor, delta=1e-3, ve=1e-2):
+
+def signal_bollinger_bands(price_df, target_col, window, std_factor, delta=1e-3, ve=1e-2, use_kalman=False):
     def kalman_filter_step(price, m_prev, R_prev, delta, ve):
-        m_pred = m_prev
-        R_pred = R_prev + delta
+            m_pred = m_prev
+            R_pred = R_prev + delta
 
-        K = R_pred / (R_pred + ve)
-        m_curr = m_pred + K * (price - m_pred)
-        R_curr = (1 - K) * R_pred
+            K = R_pred / (R_pred + ve)
+            m_curr = m_pred + K * (price - m_pred)
+            R_curr = (1 - K) * R_pred
 
-        return m_curr, R_curr
+            return m_curr, R_curr
 
     df = price_df[[target_col]].copy()
-    n = len(df)
-    m = np.zeros(n)
-    R = np.zeros(n)
-
-    initial_prices = df[target_col].values[:window]
-    m[:window] = initial_prices.mean()
-    R[:window] = initial_prices.var()
-    for t in range(window, n):
-        m[t], R[t] = kalman_filter_step(df[target_col].values[t], m[t-1], R[t-1], delta, ve)
-
-    df['MA'] = m
-    df['SD'] = np.sqrt(R)
-
+    if use_kalman:
+        n = len(df)
+        m = np.zeros(n)
+        R = np.zeros(n)
+        initial_prices = df[target_col].values[:window]
+        m[:window] = initial_prices.mean()
+        R[:window] = initial_prices.var()
+        for t in range(window, n):
+            m[t], R[t] = kalman_filter_step(df[target_col].values[t], m[t-1], R[t-1], delta, ve)
+        df['MA'] = m
+        df['SD'] = np.sqrt(R)
+    else:
+        df['MA'] = df[target_col].rolling(window=window).mean().bfill()
+        df['SD'] = df[target_col].rolling(window=window).std().bfill()
     df['U'] = df['MA'] + (df['SD'] * std_factor)
     df['L'] = df['MA'] - (df['SD'] * std_factor)
+    df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L']) # %B Indicator signal
 
     return df
 
