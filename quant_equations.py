@@ -79,13 +79,13 @@ def get_annualized_factor(period=YFinanceOptions.M15):
     factor = 0.
 
     if period == YFinanceOptions.M1:
-        factor = np.sqrt(60 * 24 * 252)
+        factor = (60 * 24 * 252)
     elif period == YFinanceOptions.M15:
-        factor = np.sqrt(4 * 24 * 252)
+        factor = (4 * 24 * 252)
     elif period == YFinanceOptions.H1:
-        factor = np.sqrt(24 * 252)
+        factor = (24 * 252)
     elif period == YFinanceOptions.D1:
-        factor = np.sqrt(252)
+        factor = (252)
     else:
         raise ValueError("Unsupported period.")
     return factor
@@ -93,10 +93,12 @@ def get_annualized_factor(period=YFinanceOptions.M15):
 def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
     mean_rets = rets.mean()
     std_rets = rets.std()
-
-    sharpe_ratio = (mean_rets - risk_free / 252) / std_rets
     factor = get_annualized_factor(period)
-    return sharpe_ratio * factor
+    sharpe_ratio = 0.
+    if std_rets != 0:
+        sharpe_ratio = (mean_rets - (risk_free / factor)) / std_rets
+        sharpe_ratio *= np.sqrt(factor)
+    return sharpe_ratio
 
 def deflated_sharpe_ratio(SR, T, skew, kurt, SRs, N):
     if SR < 0:
