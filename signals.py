@@ -73,17 +73,32 @@ def dynamic_support_resistance(df, cols, target_col, window_size=20, max_cluster
 
     assert window_size >= max_clusters
 
+    df = df.copy()
+
     dynamic_support = []
     dynamic_resistance = []
-    for start in tqdm(np.arange(0, window_size + 1, window_size)):
+    df["Support"] = np.nan
+    df["Resistance"] = np.nan
+    for start in tqdm(np.arange(0, len(df), window_size)):
         window_df = df.iloc[start:start + window_size]
-        cluster_df, km_model = sr_clusters_dtw(window_df, cols, max_clusters=window_size - 1)
-        support, resistance = identify_support_resistance(cluster_df, km_model, target_col)
-
-        dynamic_support.append(support)
-        dynamic_resistance.append(resistance)
-
-    return dynamic_support, dynamic_resistance
+        try:
+            cluster_df, km_model = sr_clusters_dtw(window_df, cols, max_clusters=min(len(window_df) - 1, window_size - 1))
+            support, resistance = identify_support_resistance(cluster_df, km_model, target_col)
+            df.iloc[start, df.columns.get_loc("Support")] = support
+            df.iloc[start, df.columns.get_loc("Resistance")] = resistance
+            dynamic_support.append(support)
+            dynamic_resistance.append(resistance)
+        except Exception as e:
+            potential_supp = np.min(df.iloc[start:start + window_size][target_col])
+            potential_res = np.max(df.iloc[start:start + window_size][target_col])
+            df.iloc[start, df.columns.get_loc("Support")] = potential_supp
+            df.iloc[start, df.columns.get_loc("Resistance")] = potential_res
+            dynamic_support.append(potential_supp)
+            dynamic_resistance.append(potential_res)
+            print(e)
+    df["Support"] = df["Support"].ffill()
+    df["Resistance"] = df["Resistance"].ffill()
+    return df, dynamic_support, dynamic_resistance
 
 
 def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_threshold=1.5):
