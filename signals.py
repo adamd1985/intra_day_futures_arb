@@ -17,7 +17,7 @@ import multiprocessing
 NUM_CORES = multiprocessing.cpu_count()
 
 
-def dynamic_support_resistance(df, cols, target_col, window_size=20, max_clusters=20):
+def dynamic_support_resistance(df, target_col, high_col, low_col, window_size=20, max_clusters=20):
     def find_optimal_clusters(data, max_clusters=150, min_clusters=2, max_no_improvement=5, sample_size=1000):
         def evaluate_clusters(n_clusters, data):
             km = MiniBatchKMeans(n_clusters=n_clusters, random_state=0, batch_size=(256 * NUM_CORES), max_no_improvement=max_no_improvement)
@@ -74,6 +74,13 @@ def dynamic_support_resistance(df, cols, target_col, window_size=20, max_cluster
     assert window_size >= max_clusters
 
     df = df.copy()
+
+    df["PP"] = df[[high_col, low_col, target_col]].mean(axis=1)
+    df["S1"] = 2 * df["PP"] - df[high_col]
+    df["R1"] = 2 * df["PP"] - df[low_col]
+    df["S2"] = df["PP"] - (df[high_col] - df[low_col])
+    df["R2"] = df["PP"] + (df[high_col] - df[low_col])
+    cols = ["PP", "S1", "R1", "S2", "R2", target_col]
 
     dynamic_support = []
     dynamic_resistance = []
