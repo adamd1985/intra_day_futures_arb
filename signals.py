@@ -1,33 +1,61 @@
 import pandas as pd
 import numpy as np
 
+from pykalman import KalmanFilter
+from tqdm import tqdm
 
-def signal_bollinger_bands(price_df, target_col, window, std_factor, delta=1e-3, ve=1e-2, use_kalman=False):
-    def kalman_filter_step(price, m_prev, R_prev, delta, ve):
-            m_pred = m_prev
-            R_pred = R_prev + delta
+from constants import YFinanceOptions
 
-            K = R_pred / (R_pred + ve)
-            m_curr = m_pred + K * (price - m_pred)
-            R_curr = (1 - K) * R_pred
+def signal_kf_bollinger_bands(price_df, target_col, volume_col, std_factor=2., kf_em_iters=5, t_max=0.1, interval=YFinanceOptions.M15):
+    def get_daily_timesteps(interval):
+        factor = 1
+        if interval == YFinanceOptions.M15:
+            factor = 4 * 24
+        return factor
 
-            return m_curr, R_curr
+    daily_steps = get_daily_timesteps(interval)
+    df = price_df[[target_col, volume_col]].copy()
+    df['Tmax'] = df[volume_col].rolling(window=daily_steps).sum().bfill() * t_max / daily_steps
+    df['V_e'] = df.apply(lambda row: row[volume_col] / row['Tmax'] if row['Tmax'] > 0 else 1, axis=1)
 
+    kf = KalmanFilter(transition_matrices=[1],  # F, State Transition
+                      observation_matrices=[1],  # H, Observation
+                      initial_state_mean=df[target_col].values[0],
+                      initial_state_covariance=1,
+                      observation_covariance=1,  # Rt, Random Walk Noise
+                      transition_covariance=0.01,  # Q, Random Walk Noise
+                      em_vars=['transition_covariance', 'initial_state_mean', 'initial_state_covariance'])
+
+    kf = kf.em(df[target_col].values, n_iter=kf_em_iters)
+
+    state_means = []
+    state_covariances = []
+    state_mean = kf.initial_state_mean
+    state_covariance = kf.initial_state_covariance
+
+    for t in tqdm(range(len(df)), desc="signal_kf_bollinger_bands"):
+        state_mean, state_covariance = kf.filter_update(state_mean,
+                                                        state_covariance,
+                                                        observation=df[target_col].values[t],
+                                                        observation_covariance=df['V_e'].values[t])
+        state_means.append(state_mean)
+        state_covariances.append(state_covariance)
+
+    state_means = pd.Series([x.flatten()[0] for x in state_means], index=df.index)
+    state_covariances = pd.Series([x.flatten()[0] for x in state_covariances], index=df.index)
+
+    df['MA'] = state_means
+    df['SD'] = np.sqrt(state_covariances)
+    df['U'] = df['MA'] + (df['SD'] * std_factor)
+    df['L'] = df['MA'] - (df['SD'] * std_factor)
+    df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L'])  # %B Indicator signal
+
+    return df
+
+def signal_bollinger_bands(price_df, target_col, window, std_factor):
     df = price_df[[target_col]].copy()
-    if use_kalman:
-        n = len(df)
-        m = np.zeros(n)
-        R = np.zeros(n)
-        initial_prices = df[target_col].values[:window]
-        m[:window] = initial_prices.mean()
-        R[:window] = initial_prices.var()
-        for t in range(window, n):
-            m[t], R[t] = kalman_filter_step(df[target_col].values[t], m[t-1], R[t-1], delta, ve)
-        df['MA'] = m
-        df['SD'] = np.sqrt(R)
-    else:
-        df['MA'] = df[target_col].rolling(window=window).mean().bfill()
-        df['SD'] = df[target_col].rolling(window=window).std().bfill()
+    df['MA'] = df[target_col].rolling(window=window).mean().bfill()
+    df['SD'] = df[target_col].rolling(window=window).std().bfill()
     df['U'] = df['MA'] + (df['SD'] * std_factor)
     df['L'] = df['MA'] - (df['SD'] * std_factor)
     df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L']) # %B Indicator signal
