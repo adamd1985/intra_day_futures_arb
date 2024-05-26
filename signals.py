@@ -628,6 +628,8 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
 
     return results
 
+
+
 def kalman_backtest(spread, volumes, prices, period, thresholds=[0, 0.5, 1], stoploss_pct=0.9, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
     results = signal_kf(spread, volumes, prices, delta_t=delta_t, q_t=q_t, r_t=r_t)
     df = results.copy()
@@ -638,7 +640,8 @@ def kalman_backtest(spread, volumes, prices, period, thresholds=[0, 0.5, 1], sto
     df['SSB'] = (df['Filtered_X'] <= thresholds[1]).astype(int).diff().clip(0) * +1
     df['Closed'] = 0
     df['Position'] = 0
-    df['Ret'] = 0.0
+    df['Ret'] = 0.
+    df['Unreal_Ret'] = 0.
     entry = position = 0
     for i, row in tqdm(df.iterrows(), desc="kalman_backtest"):
         if (row['SBS'] == -1 and position == 1) or \
@@ -657,6 +660,9 @@ def kalman_backtest(spread, volumes, prices, period, thresholds=[0, 0.5, 1], sto
             entry = row['Close']
             position = 1 if row['SB'] == 1 else -1
         df.loc[i, 'Position'] = position
+        if position != 0:
+            # Unrealized for continuous returns tracking.
+            df.loc[i, 'Unreal_Ret'] = (entry - row['Close']) / entry
 
     df['cRets'] = (1 + df['Ret']).cumprod() - 1
 
