@@ -567,7 +567,7 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
     state_mean = np.array([initial_x, 0, 0])
     # https://pykalman.github.io/
     kf = KalmanFilter(
-        transition_matrices,
+        transition_matrices = F,
         observation_matrices=H,
         initial_state_mean=state_mean,
         initial_state_covariance=np.eye(3),
