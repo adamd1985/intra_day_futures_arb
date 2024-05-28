@@ -17,7 +17,7 @@ import multiprocessing
 NUM_CORES = multiprocessing.cpu_count()
 
 
-def dynamic_support_resistance(df, target_col, high_col, low_col, window_size=20, max_clusters=20):
+def dynamic_support_resistance(price_df, target_col, high_col, low_col, window_size=20, max_clusters=20):
     def find_optimal_clusters(data, max_clusters=150, min_clusters=2, max_no_improvement=5, sample_size=1000):
         def evaluate_clusters(n_clusters, data):
             km = MiniBatchKMeans(n_clusters=n_clusters, random_state=0, batch_size=(256 * NUM_CORES), max_no_improvement=max_no_improvement)
@@ -73,7 +73,7 @@ def dynamic_support_resistance(df, target_col, high_col, low_col, window_size=20
 
     assert window_size >= max_clusters
 
-    df = df.copy()
+    df = price_df.copy()
 
     df["PP"] = df[[high_col, low_col, target_col]].mean(axis=1)
     df["S1"] = 2 * df["PP"] - df[high_col]
@@ -178,7 +178,7 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
 
     return df, stats_df
 
-def param_search_tsmom(df, target_col, period, initial_window=20, window_factor = 1.5, window_min = 4, intial_std_threshold=1.5, hurst=0.5):
+def param_search_tsmom(df, target_col, period, initial_window=20, window_factor = 1.5, window_min = 10, intial_std_threshold=1.5, hurst=0.5):
     assert initial_window > 0 and initial_window > window_min, f"initial_window: {initial_window} > window_min: {window_min}"
 
     num_steps = int(math.log(initial_window / window_min, window_factor)) + 1
@@ -234,7 +234,7 @@ def param_search_tsmom(df, target_col, period, initial_window=20, window_factor 
 
     return results_df
 
-def signal_kf_bollinger_bands(price_df, target_col, volume_col, std_factor=2., kf_em_iters=5, t_max=0.1, interval=YFinanceOptions.M15):
+def signal_kf_bollinger_bands(price_df, volume_df, std_factor=2., kf_em_iters=5, t_max=0.1, q_t=0.1, r_t=1, interval=YFinanceOptions.M15):
     def get_daily_timesteps(interval):
         factor = 1
         if interval == YFinanceOptions.M15:
@@ -242,19 +242,21 @@ def signal_kf_bollinger_bands(price_df, target_col, volume_col, std_factor=2., k
         return factor
 
     daily_steps = get_daily_timesteps(interval)
-    df = price_df[[target_col, volume_col]].copy()
-    df['Tmax'] = df[volume_col].rolling(window=daily_steps).sum().bfill() * t_max / daily_steps
-    df['V_e'] = df.apply(lambda row: row[volume_col] / row['Tmax'] if row['Tmax'] > 0 else 1, axis=1)
+
+    df = pd.DataFrame()
+    df['Close'] = price_df
+    df['Volume'] = volume_df
+    df['Tmax'] = df['Volume'].rolling(window=daily_steps).sum().bfill() * t_max / daily_steps
+    df['V_e'] = df.apply(lambda row: row['Volume'] / row['Tmax'] if row['Tmax'] > 0 else 1, axis=1)
 
     kf = KalmanFilter(transition_matrices=[1],  # F, State Transition
                       observation_matrices=[1],  # H, Observation
-                      initial_state_mean=df[target_col].values[0],
+                      initial_state_mean=df['Close'].values[0],
                       initial_state_covariance=1,
-                      observation_covariance=1,  # Rt, Random Walk Noise
-                      transition_covariance=0.01,  # Q, Random Walk Noise
+                      observation_covariance=r_t,  # Rt, Random Walk Noise
+                      transition_covariance=q_t,  # Q, Random Walk Noise
                       em_vars=['transition_covariance', 'initial_state_mean', 'initial_state_covariance'])
-
-    kf = kf.em(df[target_col].values, n_iter=kf_em_iters)
+    kf = kf.em(df['Close'].values, n_iter=kf_em_iters)
 
     state_means = []
     state_covariances = []
@@ -264,21 +266,20 @@ def signal_kf_bollinger_bands(price_df, target_col, volume_col, std_factor=2., k
     for t in tqdm(range(len(df)), desc="signal_kf_bollinger_bands"):
         state_mean, state_covariance = kf.filter_update(state_mean,
                                                         state_covariance,
-                                                        observation=df[target_col].values[t],
+                                                        observation=df['Close'].values[t],
                                                         observation_covariance=df['V_e'].values[t])
         state_means.append(state_mean)
         state_covariances.append(state_covariance)
 
-    state_means = pd.Series([x.flatten()[0] for x in state_means], index=df.index)
-    state_covariances = pd.Series([x.flatten()[0] for x in state_covariances], index=df.index)
+    stats_df = pd.DataFrame()
+    stats_df["MA"] = pd.Series([x.flatten()[0] for x in state_means], index=df.index)
+    stats_df["SD"] = np.sqrt(pd.Series([x.flatten()[0] for x in state_covariances], index=df.index))
+    stats_df["U"] = stats_df['MA'] + (stats_df['SD'] * std_factor)
+    stats_df["L"] = stats_df['MA'] - (stats_df['SD'] * std_factor)
+    stats_df["%B"] = (df['Close'] - stats_df['L']) / (stats_df['U'] - stats_df['L'])  # %B Indicator signal
 
-    df['MA'] = state_means
-    df['SD'] = np.sqrt(state_covariances)
-    df['U'] = df['MA'] + (df['SD'] * std_factor)
-    df['L'] = df['MA'] - (df['SD'] * std_factor)
-    df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L'])  # %B Indicator signal
+    return stats_df
 
-    return df
 
 def signal_bollinger_bands(price_df, target_col, window, std_factor):
     df = price_df[[target_col]].copy()
@@ -412,18 +413,20 @@ def param_search_bbs(df, target_col, period, stoploss_pct=0.1, initial_window=20
 
     return results_df
 
-def kf_bollinger_band_backtest(price_df, target_col, volume_col, period, std_factor=0.5, stoploss_pct=0.9, t_max=0.1):
+def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stoploss_pct=0.9, t_max=0.1):
     df = price_df.copy()
-    bb_df = signal_kf_bollinger_bands(df, target_col, volume_col, std_factor, t_max=t_max)
+    bb_df = signal_kf_bollinger_bands(price_df, volume_df, std_factor, t_max=t_max)
 
+    df = pd.DataFrame()
+    df['Close'] = price_df
     df['MA'] = bb_df['MA']
     df['SD'] = bb_df['SD']
     df['U'] = bb_df['U']
     df['L'] = bb_df['L']
-    df['SB'] = (df[target_col] < bb_df['L']).astype(int).diff().clip(0) * +1
-    df['SS'] = (df[target_col] > bb_df['U']).astype(int).diff().clip(0) * -1
-    df['SBS'] = (df[target_col] > bb_df['MA']).astype(int).diff().clip(0) * -1
-    df['SSB'] = (df[target_col] < bb_df['MA']).astype(int).diff().clip(0) * +1
+    df['SB'] = (df['Close'] < bb_df['L']).astype(int).diff().clip(0) * +1
+    df['SS'] = (df['Close'] > bb_df['U']).astype(int).diff().clip(0) * -1
+    df['SBS'] = (df['Close'] > bb_df['MA']).astype(int).diff().clip(0) * -1
+    df['SSB'] = (df['Close'] < bb_df['MA']).astype(int).diff().clip(0) * +1
     df['Closed'] = 0
     df['Position'] = 0
     df['Ret'] = 0.
@@ -431,18 +434,18 @@ def kf_bollinger_band_backtest(price_df, target_col, volume_col, period, std_fac
     for i, row in df.iterrows():
         if (row['SBS'] == -1 and position == 1) or \
             (row['SSB'] == 1 and position == -1) or \
-            (position == 1 and row[target_col] <= row[target_col] - (stoploss_pct * entry)) or \
-            (position == -1 and row[target_col] >= row[target_col] + (stoploss_pct * entry)):
+            (position == 1 and row['Close'] <= row['Close'] - (stoploss_pct * entry)) or \
+            (position == -1 and row['Close'] >= row['Close'] + (stoploss_pct * entry)):
             if position == 1:
-                df.loc[i, 'Ret'] = (row[target_col] - entry) / entry
+                df.loc[i, 'Ret'] = (row['Close'] - entry) / entry
                 df.loc[i, 'Closed'] = 1
             else:
-                df.loc[i, 'Ret'] = (entry - row[target_col]) / entry
+                df.loc[i, 'Ret'] = (entry - row['Close']) / entry
                 df.loc[i, 'Closed'] = -1
             position = 0
 
         if (row['SB'] == 1 and position == 0) or (row['SS'] == -1 and position == 0):
-            entry = row[target_col]
+            entry = row['Close']
             position = 1 if row['SB'] == 1 else -1
         df.loc[i, 'Position'] = position
         # TODO: add unrealized returns to check for DDs.
@@ -477,7 +480,7 @@ def kf_bollinger_band_backtest(price_df, target_col, volume_col, period, std_fac
 
     return df, stats_df
 
-def param_search_kf_bbs(df, target_col, volume_col, period, hurst):
+def param_search_kf_bbs(price_df, volume_df, period, hurst):
     std_adjustments = [0.05, 0.25, 0.5]
     t_maxs = [0.1, 0.5, 0.9]
     combinations = list(itertools.product(t_maxs, std_adjustments))
@@ -494,7 +497,7 @@ def param_search_kf_bbs(df, target_col, volume_col, period, hurst):
 
     for t_max, adjustment in tqdm(combinations, desc="param_search_bbs"):
         std_factor = modulate_std(hurst, adjustment=adjustment)
-        _, stats_df = kf_bollinger_band_backtest(df, target_col, volume_col, period, std_factor=std_factor, t_max=t_max)
+        _, stats_df = kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=std_factor, t_max=t_max)
 
         stat = stats_df['Sharpe'].iloc[0]
         sharpes.append(stat)
@@ -528,32 +531,29 @@ def param_search_kf_bbs(df, target_col, volume_col, period, hurst):
 
     return results_df
 
-def signal_tsmom(prices, lookback, contra_lookback, std_threshold=2):
+def signal_tsmom(prices_df, lookback, contra_lookback, std_threshold=2):
     def get_auto_covariance(returns, window):
         mean_returns = returns.rolling(window=window).mean()
         auto_cov = (returns - mean_returns).rolling(window=window).apply(lambda x: np.mean((x - x.mean()) * (x.shift(1) - x.shift(1).mean())))
         return auto_cov
 
-    returns = prices.pct_change().fillna(0.)
+    returns = prices_df.pct_change().fillna(0.)
     auto_cov = get_auto_covariance(returns, lookback).fillna(0.)
 
     signals = (1 * np.sign(auto_cov)).astype(int)
     contra_signal = 0
     if contra_lookback > 0:
-        rolling_std = prices.rolling(window=contra_lookback).std()
+        rolling_std = prices_df.rolling(window=contra_lookback).std()
         contra_signal = (((signals > 0) & (rolling_std < -std_threshold)) | ((signals < 0) & (rolling_std > std_threshold))).astype(int)
 
-    signals_df = pd.DataFrame({
-        'TSMOM': signals,
-        'CONTRA': contra_signal
-    }, index=returns.index)
+    signals_df = pd.DataFrame({'TSMOM': signals, 'CONTRA': contra_signal})
 
     return signals_df
 
 
-def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
+def signal_kf(spread_df, volumes_df, price_df, em_train_perc=0.1, em_iter=5, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
     # State transition matrix
-    train_size = int(len(spread) * em_train_perc)
+    train_size = int(len(price_df) * em_train_perc)
     F = np.array([
         [1, delta_t, 0.5 * delta_t**2],
         [0, 1, delta_t],
@@ -562,8 +562,8 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
     # Observation matrix
     H = np.array([[1, 0, 0]])
     # Initial values don't have that much affect down the line.
-    initial_x = np.mean(spread[:train_size])
-    initial_var = np.var(spread[:train_size])
+    initial_x = np.mean(spread_df.iloc[:train_size])
+    initial_var = np.var(spread_df.iloc[:train_size])
     state_mean = np.array([initial_x, 0, 0])
     # https://pykalman.github.io/
     kf = KalmanFilter(
@@ -578,8 +578,8 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
     )
 
     # 'Train'. EM to find the best Model Var
-    kf = kf.em(spread[:train_size], n_iter=em_iter)
-    filtered_state_means, filtered_state_covariances = kf.filter(spread[:train_size])
+    kf = kf.em(spread_df.iloc[:train_size], n_iter=em_iter)
+    filtered_state_means, filtered_state_covariances = kf.filter(spread_df.iloc[:train_size])
     state_mean = filtered_state_means[-1]
     state_covariance = filtered_state_covariances[-1]
 
@@ -589,17 +589,17 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
     filtered_state_covariances = []
     kalman_gains = []
 
-    for i in tqdm(range(train_size, len(spread))):
+    for i in tqdm(range(train_size, len(price_df))):
         # Rt = Pt * Vt-1 / min(Vt-1, Vt)
-        if volumes[i-1] != 0 and volumes[i] != 0:
-            Rt = (state_covariance[0, 0] * volumes[i-1]) / min(volumes[i-1], volumes[i])
+        if volumes_df.iloc[i-1] != 0 and volumes_df.iloc[i] != 0:
+            Rt = (state_covariance[0, 0] * volumes_df.iloc[i-1]) / min(volumes_df.iloc[i-1], volumes_df.iloc[i])
         else:
             Rt = state_covariance[0, 0]
-        assert not np.isnan(Rt).any(), f"{Rt} = {state_covariance[0, 0] } * {volumes[i-1]} / {min(volumes[i-1], volumes[i])} at {i}"
+
         state_mean, state_covariance = kf.filter_update(
             filtered_state_mean=state_mean,
             filtered_state_covariance=state_covariance,
-            observation=np.array([spread[i]]),
+            observation=np.array([spread_df.iloc[i]]),
             observation_matrix=H,
             observation_covariance=np.array([[Rt]])
         )
@@ -611,11 +611,11 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
         hidden_1.append(state_mean[1])
         hidden_2.append(state_mean[2])
 
-    residuals = spread[train_size:] - np.array(filtered_state_means)
+    residuals = spread_df.iloc[train_size:] - np.array(filtered_state_means)
 
     results = pd.DataFrame({
-        'Close': prices[train_size:],
-        'X': spread[train_size:],
+        'Close': price_df.iloc[train_size:],
+        'X': spread_df.iloc[train_size:],
         'Z1': hidden_1,
         'Z2': hidden_2,
         'Filtered_X': filtered_state_means,
@@ -630,9 +630,8 @@ def signal_kf(spread, volumes, prices, em_train_perc=0.1, em_iter=5, delta_t=1, 
 
 
 
-def kalman_backtest(spread, volumes, prices, period, thresholds=[0, 0.5, 1], stoploss_pct=0.9, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
-    results = signal_kf(spread, volumes, prices, delta_t=delta_t, q_t=q_t, r_t=r_t)
-    df = results.copy()
+def kalman_backtest(spread_df, volumes_df, price_df, period, thresholds=[0, 0.5, 1], stoploss_pct=0.9, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
+    df = signal_kf(spread_df, volumes_df, price_df, delta_t=delta_t, q_t=q_t, r_t=r_t)
 
     df['SB'] = (df['Filtered_X'] <= thresholds[0]).astype(int).diff().clip(0) * +1
     df['SS'] = (df['Filtered_X'] >= thresholds[2]).astype(int).diff().clip(0) * -1
