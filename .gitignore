@@ -1,6 +1,7 @@
 logs
 models
 images
+tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
