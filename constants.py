@@ -22,6 +22,11 @@ class StockFeat:
     VOLUME = "Volume"
     list = [OPEN, HIGH, LOW, CLOSE, VOLUME]
 
+class StockFeatExt(StockFeat):
+    SPREAD = "Spread"
+    BARCOUNT = "Barcount"
+    AVERAGE = "Average"
+    list = StockFeat.list + [SPREAD, BARCOUNT, AVERAGE]
 
 PERIOD_PD_FREQ = {
     YFinanceOptions.M1: '1T',
