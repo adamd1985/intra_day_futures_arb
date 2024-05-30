@@ -16,8 +16,7 @@ from sklearn.metrics import silhouette_score
 import multiprocessing
 NUM_CORES = multiprocessing.cpu_count()
 
-
-def dynamic_support_resistance(price_df, target_col, high_col, low_col, window_size=20, max_clusters=20):
+def dynamic_support_resistance(price_df, target_col, high_col, low_col, initial_window_size=20, max_clusters=20):
     def find_optimal_clusters(data, max_clusters=150, min_clusters=2, max_no_improvement=5, sample_size=1000):
         def evaluate_clusters(n_clusters, data):
             km = MiniBatchKMeans(n_clusters=n_clusters, random_state=0, batch_size=(256 * NUM_CORES), max_no_improvement=max_no_improvement)
@@ -71,8 +70,6 @@ def dynamic_support_resistance(price_df, target_col, high_col, low_col, window_s
 
         return support_value, resistance_value
 
-    assert window_size >= max_clusters
-
     df = price_df.copy()
 
     df["PP"] = df[[high_col, low_col, target_col]].mean(axis=1)
@@ -86,27 +83,37 @@ def dynamic_support_resistance(price_df, target_col, high_col, low_col, window_s
     dynamic_resistance = []
     df["Support"] = np.nan
     df["Resistance"] = np.nan
-    for start in tqdm(np.arange(0, len(df), window_size)):
+
+    start = 0
+    while start < len(df):
+        window_size = min(initial_window_size, len(df) - start)
+        if window_size < 2:
+            break
         window_df = df.iloc[start:start + window_size]
+        max_clusters = min(len(window_df) - 1, initial_window_size - 1)
         try:
-            cluster_df, km_model = sr_clusters_dtw(window_df, cols, max_clusters=min(len(window_df) - 1, window_size - 1))
+            cluster_df, km_model = sr_clusters_dtw(window_df, cols, max_clusters=max_clusters)
             support, resistance = identify_support_resistance(cluster_df, km_model, target_col)
-            df.iloc[start, df.columns.get_loc("Support")] = support
-            df.iloc[start, df.columns.get_loc("Resistance")] = resistance
+            df.iloc[start:start + window_size, df.columns.get_loc("Support")] = support
+            df.iloc[start:start + window_size, df.columns.get_loc("Resistance")] = resistance
             dynamic_support.append(support)
             dynamic_resistance.append(resistance)
         except Exception as e:
             potential_supp = np.min(df.iloc[start:start + window_size][target_col])
             potential_res = np.max(df.iloc[start:start + window_size][target_col])
-            df.iloc[start, df.columns.get_loc("Support")] = potential_supp
-            df.iloc[start, df.columns.get_loc("Resistance")] = potential_res
+            df.iloc[start:start + window_size, df.columns.get_loc("Support")] = potential_supp
+            df.iloc[start:start + window_size, df.columns.get_loc("Resistance")] = potential_res
             dynamic_support.append(potential_supp)
             dynamic_resistance.append(potential_res)
             print(e)
+
+        # Dynamically adjust the window size
+        window_size = int(window_size * 1.5)
+        start += window_size
+
     df["Support"] = df["Support"].ffill()
     df["Resistance"] = df["Resistance"].ffill()
     return df, dynamic_support, dynamic_resistance
-
 
 def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_threshold=1.5):
     df = df.copy()
@@ -126,6 +133,8 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
 
     entry = 0
     position = 0
+    remove_signals = False
+    # TODO: Vectorize this.
     for i, row in df.iterrows():
         if (row['SBS'] and position == 1) or (row['SSB'] and position == -1):
             if position == 1:
@@ -135,15 +144,24 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
                 df.at[i, 'Ret'] = (entry - row[target_col]) / entry
                 df.at[i, 'Closed'] = -1
             position = 0
+            remove_signals = False
+        if remove_signals:
+            # Just to make graphs clearer.
+            df.at[i, 'SB'] = False
+            df.at[i, 'SS'] = False
+            df.at[i, 'SBS'] = False
+            df.at[i, 'SSB'] = False
         if row['SB'] and position == 0:
             entry = row[target_col]
             position = 1
+            remove_signals = True
         elif row['SS'] and position == 0:
             entry = row[target_col]
             position = -1
-        if position !=0 and row['CONTRA'] != 0:
+            remove_signals = True
+        if position != 0 and row['CONTRA'] != 0:
+            # THe contrarian policy, if the variance shows a breakdown of momentum.
             position = -position
-
         df.at[i, 'Position'] = position
 
     df['Ret'] = df['Position'] * df[target_col].pct_change().fillna(0)
@@ -178,12 +196,13 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
 
     return df, stats_df
 
+
 def param_search_tsmom(df, target_col, period, initial_window=20, window_factor = 1.5, window_min = 10, intial_std_threshold=1.5, hurst=0.5):
     assert initial_window > 0 and initial_window > window_min, f"initial_window: {initial_window} > window_min: {window_min}"
 
     num_steps = int(math.log(initial_window / window_min, window_factor)) + 1
     windows = [int(initial_window // (window_factor**i)) for i in range(num_steps)]
-    contra_windows = [0, 1, 3] # in the paper they lookback 3 months (steps).
+    contra_windows = [0, 3, window_min, initial_window//2] # in the paper they lookback 3 months (steps).
     std_thresholds = [intial_std_threshold, intial_std_threshold + 0.5]
 
     combinations = list(itertools.product(windows, contra_windows, std_thresholds))
@@ -307,9 +326,10 @@ def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5
     df['Position'] = 0
     df['Ret'] = 0.
     entry = position = 0
+    remove_signals = False
     for i, row in df.iterrows():
         if df.index.get_loc(i) < window:
-            df.loc[i, 'Position'] = 0
+            # Signal doesnt have enough data.
             continue
         if (row['SBS'] == -1 and position == 1) or \
             (row['SSB'] == 1 and position == -1) or \
@@ -322,10 +342,18 @@ def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5
                 df.loc[i, 'Ret'] = (entry - row[target_col]) / entry
                 df.loc[i, 'Closed'] = -1
             position = 0
+            remove_signals = False
+        if remove_signals:
+            # Just to make graphs clearer.
+            df.at[i, 'SB'] = False
+            df.at[i, 'SS'] = False
+            df.at[i, 'SBS'] = False
+            df.at[i, 'SSB'] = False
 
         if (row['SB'] == 1 and position == 0) or (row['SS'] == -1 and position == 0):
             entry = row[target_col]
             position = 1 if row['SB'] == 1 else -1
+            remove_signals = True
         df.loc[i, 'Position'] = position
         # TODO: add unrealized returns to check for DDs.
 
@@ -423,6 +451,7 @@ def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stop
     df['SD'] = bb_df['SD']
     df['U'] = bb_df['U']
     df['L'] = bb_df['L']
+    df["%B"] = bb_df["%B"]
     df['SB'] = (df['Close'] < bb_df['L']).astype(int).diff().clip(0) * +1
     df['SS'] = (df['Close'] > bb_df['U']).astype(int).diff().clip(0) * -1
     df['SBS'] = (df['Close'] > bb_df['MA']).astype(int).diff().clip(0) * -1
@@ -431,6 +460,7 @@ def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stop
     df['Position'] = 0
     df['Ret'] = 0.
     entry = position = 0
+    remove_signals= False
     for i, row in df.iterrows():
         if (row['SBS'] == -1 and position == 1) or \
             (row['SSB'] == 1 and position == -1) or \
@@ -443,10 +473,17 @@ def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stop
                 df.loc[i, 'Ret'] = (entry - row['Close']) / entry
                 df.loc[i, 'Closed'] = -1
             position = 0
-
+            remove_signals= False
+        if remove_signals:
+            # Just to make graphs clearer.
+            df.at[i, 'SB'] = False
+            df.at[i, 'SS'] = False
+            df.at[i, 'SBS'] = False
+            df.at[i, 'SSB'] = False
         if (row['SB'] == 1 and position == 0) or (row['SS'] == -1 and position == 0):
             entry = row['Close']
             position = 1 if row['SB'] == 1 else -1
+            remove_signals= True
         df.loc[i, 'Position'] = position
         # TODO: add unrealized returns to check for DDs.
 
