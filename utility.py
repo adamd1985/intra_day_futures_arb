@@ -124,7 +124,10 @@ MARKET_COLS = [f"{fut}_{col}" for col in StockFeatExt.list for fut in MARKET_FUT
 COLS_TO_SCALE = StockFeatExt.list + BB_COLS + SR_COLS
 
 META_LABEL = "mr_label"
-
+ALL_FEATURES = KF_COLS + BB_COLS + SR_COLS + MOM_COLS + MARKET_COLS + StockFeatExt.list
+FEATURES_SELECTED = ['10Y_Barcount', '10Y_Spread', '10Y_Volume', '2YY_Spread', '2YY_Volume',
+                    'CONTRA', 'Filtered_X', 'KG_X', 'KG_Z1', 'RTY_Spread', 'SD', 'Spread',
+                    'TSMOM', 'VXM_Open', 'VXM_Spread', 'Volume']
 
 ### FORMULAS
 
@@ -1044,11 +1047,11 @@ def aug_metalabel_mr(df, metalabel = META_LABEL):
     df[metalabel] = 0
     position = 0
     start_index = None
-    df[META_LABEL] = 0
-    for i, row in tqdm(df.iterrows(), desc="Posthoc Metalabeling"):
+    df[metalabel] = 0
+    for i, row in df.iterrows():
         if row['Closed'] != 0:
             # Position closed, work backwards
-            metalabel = (row['Ret'] > 0.).astype(int)
+            metalabel = int(row['Ret'] > 0.)
             if start_index is not None and metalabel:
                 df.loc[start_index:row.name, META_LABEL] = metalabel
             position = 0
