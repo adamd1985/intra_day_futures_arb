@@ -20,7 +20,6 @@ from sklearn.metrics import silhouette_score
 
 from tqdm import tqdm
 
-from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.tools.tools import add_constant
 
@@ -1063,7 +1062,7 @@ def aug_metalabel_mr(df, metalabel = META_LABEL):
 
     return df
 
-def augment_ts(df, target_close, target_high, target_low, target_volume, interval, cols_to_scale=COLS_TO_SCALE, scaler=None):
+def augment_ts(df, target_close, target_high, target_low, target_volume, interval):
     hl, h = get_ou(df, target_close)
     window = abs(hl)
     mod_std = modulate_std(h)
@@ -1075,20 +1074,8 @@ def augment_ts(df, target_close, target_high, target_low, target_volume, interva
 
     aug_ts_df = pd.concat([df[StockFeatExt.list], sr_df, kf_df, bb_df, mom_df], axis=1).bfill().ffill()
     aug_ts_df = aug_ts_df.loc[:, ~aug_ts_df.columns.duplicated(keep="first")]
-    if cols_to_scale is not None:
-        # Scale the raw values, and concat with the signals.
-        aug_df_scaled = None
-        if scaler is None:
-            scaler = StandardScaler()
-            aug_df_scaled = scaler.fit_transform(aug_ts_df[cols_to_scale])
-        else:
-            aug_df_scaled = scaler.transform(aug_ts_df[cols_to_scale])
 
-        aug_df_scaled = pd.DataFrame(aug_df_scaled, columns=cols_to_scale)
-        aug_ts_df = pd.concat([aug_df_scaled, aug_ts_df.drop(columns=cols_to_scale).reset_index(drop=True)], axis=1)
-        aug_ts_df = aug_ts_df.loc[:, ~aug_ts_df.columns.duplicated(keep="first")]
-
-    return aug_ts_df, scaler
+    return aug_ts_df
 
 def process_exog(futures, futs_df):
     futs_exog_ts = []
@@ -1102,19 +1089,17 @@ def process_exog(futures, futs_df):
 
     return futs_exog_df
 
-def process_futures(futures, futs_df, futs_exog_df, train_size, interval, cols_to_scale=COLS_TO_SCALE):
+def process_futures(futures, futs_df, futs_exog_df, train_size, interval):
     training_ts = []
     val_ts = []
-    scalers = []
     for f in tqdm(futures, desc="process_futures"):
         fut_df = futs_df.filter(regex=f"{f}_.*")
         fut_df.columns = fut_df.columns.str.replace(f"{f}_", "", regex=False)
         fut_df = pd.concat([fut_df, futs_exog_df], axis=1)
 
-        train_df, scaler = augment_ts(fut_df.iloc[:train_size], StockFeatExt.CLOSE, StockFeatExt.HIGH, StockFeatExt.LOW, StockFeatExt.VOLUME, interval, cols_to_scale=cols_to_scale)
-        test_df, _ = augment_ts(fut_df.iloc[train_size:], StockFeatExt.CLOSE, StockFeatExt.HIGH, StockFeatExt.LOW, StockFeatExt.VOLUME, interval, cols_to_scale=cols_to_scale, scaler=scaler)
+        train_df = augment_ts(fut_df.iloc[:train_size], StockFeatExt.CLOSE, StockFeatExt.HIGH, StockFeatExt.LOW, StockFeatExt.VOLUME, interval)
+        test_df = augment_ts(fut_df.iloc[train_size:], StockFeatExt.CLOSE, StockFeatExt.HIGH, StockFeatExt.LOW, StockFeatExt.VOLUME, interval)
         training_ts.append(train_df.reset_index(drop=True))
         val_ts.append(test_df.reset_index(drop=True))
-        scalers.append(scaler) # we use these later in the validation.
 
-    return training_ts, val_ts, scalers
+    return training_ts, val_ts
