@@ -121,7 +121,8 @@ KF_COLS = ['SD','Z1', 'Z2', 'Filtered_X', 'KG_X', 'KG_Z1', 'KG_Z2'] # ['Z1', 'Z2
 BB_COLS = ['MA', 'U','L'] # ['SB','SS','SBS','SSB', 'Unreal_Ret', 'MA','SD', 'U','L', '%B', 'X']
 SR_COLS = ["Support", "Resistance"] # ["PP", "S1", "R1", "S2", "R2", "Support", "Resistance"]
 MOM_COLS = ["TSMOM", "CONTRA"]
-MARKET_COLS = [f"{fut}_{col}" for col in StockFeatExt.list for fut in MARKET_FUTS]
+MARKET_COLS = [f"{fut}_{col}" for col in StockFeat.list for fut in MARKET_FUTS]
+MARKET_COLS_EXT = [f"{fut}_{col}" for col in StockFeatExt.list for fut in MARKET_FUTS]
 # We scale RAW column, the rest are percentages or log values.
 COLS_TO_SCALE = StockFeatExt.list + BB_COLS + SR_COLS + KF_COLS + MARKET_COLS
 
