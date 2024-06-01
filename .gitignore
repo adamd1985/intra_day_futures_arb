@@ -1,7 +1,8 @@
-logs
-models
-images
-tmp
+logs/
+models/
+models/history.json
+images/
+tmp/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
