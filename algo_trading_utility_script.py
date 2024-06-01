@@ -122,7 +122,7 @@ SR_COLS = ["Support", "Resistance"] # ["PP", "S1", "R1", "S2", "R2", "Support", 
 MOM_COLS = ["TSMOM", "CONTRA"]
 MARKET_COLS = [f"{fut}_{col}" for col in StockFeatExt.list for fut in MARKET_FUTS]
 # We scale RAW column, the rest are percentages or log values.
-COLS_TO_SCALE = StockFeatExt.list + BB_COLS + SR_COLS
+COLS_TO_SCALE = StockFeatExt.list + BB_COLS + SR_COLS + KF_COLS
 
 META_LABEL = "mr_label"
 ALL_FEATURES = KF_COLS + BB_COLS + SR_COLS + MOM_COLS + MARKET_COLS + StockFeatExt.list
