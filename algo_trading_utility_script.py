@@ -1,12 +1,12 @@
-# %% [code]
-# %% [code]
-# %% [code]
-# %% [code]
-# %% [code] {"jupyter":{"outputs_hidden":false}}
 import pandas as pd
 import numpy as np
 import itertools
 import math
+from datetime import datetime
+
+import os
+import sys
+import warnings
 
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
@@ -36,6 +36,9 @@ import matplotlib.pyplot as plt
 import multiprocessing
 NUM_CORES = multiprocessing.cpu_count()
 
+import yfinance as yf
+import pandas_market_calendars as mcal
+
 ## CONSTANTS
 
 class YFinanceOptions:
@@ -51,8 +54,6 @@ class YFinanceOptions:
     DATE_TIME_FORMAT = "%Y-%m-%d"
     DATE_TIME_HRS_FORMAT = '%Y-%m-%d %H:%M:%S %Z'
 
-INTERVAL = YFinanceOptions.M15
-
 class StockFeat:
     DATETIME = "Date"
     OPEN = "Open"
@@ -62,6 +63,7 @@ class StockFeat:
     VOLUME = "Volume"
     list = [OPEN, HIGH, LOW, CLOSE, VOLUME]
 
+# the brocker gives extended info.
 class StockFeatExt(StockFeat):
     SPREAD = "Spread"
     BARCOUNT = "Barcount"
@@ -71,71 +73,191 @@ class StockFeatExt(StockFeat):
 PERIOD_PD_FREQ = {
     YFinanceOptions.M1: '1T',
     YFinanceOptions.M15: '15T',
+    YFinanceOptions.D1: '1D',
 }
 
-# Market
-SNP_FUT = "ES" # E-min SnP futures
-NSDQ_FUT = "NQ"
-VOLATILITY_FUT= "VXM"  # CBOE Volatility Futs - for May2024 - no continous.
-RUS_FUT = "RTY"
-FUTURE_RATES_FUT = "10Y" # 10 Year Yield
-CURRENT_RATES_FUT = "2YY" # 10 Year Yield
-MARKET_FUTS = [SNP_FUT, NSDQ_FUT, VOLATILITY_FUT, RUS_FUT, CURRENT_RATES_FUT, FUTURE_RATES_FUT]
+# Market. Yfinance is missing some futures, using their index as proxy.
+SNP_DX = "^GSPC"
+NSDQ_DX = "^NDX"
+VOLATILITY_DX= "^VIX"
+RUS_DX= "^RUT"
+Y10_RATE_DX = "^TNX"
+Y5_RATE_DX = "^FVX"
+MARKET_DX= [Y10_RATE_DX, Y5_RATE_DX, VOLATILITY_DX, NSDQ_DX, SNP_DX, RUS_DX]
 
 # Metals
-GOLD_FUT = "GC"
-SILVER_FUT = "SI"
-COPPER_FUT = "HG"
-PLATINUM_FUT = "PL"
-PALLADIUM_FUT = "PA"
-
+GOLD_FUT = "GC=F"
+SILVER_FUT = "SI=F"
+COPPER_FUT = "HG=F"
+PLATINUM_FUT = "PL=F"
+PALLADIUM_FUT = "PA=F"
 METALS_FUTS = [GOLD_FUT, SILVER_FUT, COPPER_FUT, PLATINUM_FUT, PALLADIUM_FUT]
 
 # Energy
-CRUDEOIL_FUT = "CL"
-NATURALGAS_FUT = "NG"
-HEATINGOIL_FUT = "HO"
-RBOB_FUT = "RB"
+CRUDEOIL_FUT = "CL=F"
+NATURALGAS_FUT = "NG=F"
+HEATINGOIL_FUT = "HO=F"
+RBOB_FUT = "RB=F"
+ENERGY_FUTS=[CRUDEOIL_FUT, NATURALGAS_FUT, HEATINGOIL_FUT, RBOB_FUT]
 
+FUTS = METALS_FUTS + ENERGY_FUTS
 
-ENERGY_FUTS = [CRUDEOIL_FUT, NATURALGAS_FUT, HEATINGOIL_FUT]
+# Equities
+AAPL = "AAPL"
+TESLA = "TSLA"
+EQUITIES=[AAPL, TESLA]
 
-# Agri
-CORN_FUT = "ZC"
-SOYOIL_FUT = "ZL"
-KCWHEAT_FUT = "KE"
-SOYBEAN_FUT = "ZS"
-SOYBEANMEAL_FUT = "ZM"
-WHEAT_FUT = "ZW"
-LIVECATTLE_FUT = "LE"
-LEANHOG_FUT = "HE"
-FEEDERCATTLE_FUT = "GF"
-MILK_FUT = "DA"
+# For yahoofinance, future tickers have =F flag.
+ALL_TICKERS = EQUITIES +FUTS+MARKET_DX
 
-AGRI_FUTS = [CORN_FUT, SOYOIL_FUT, KCWHEAT_FUT, SOYBEAN_FUT, SOYBEANMEAL_FUT, WHEAT_FUT, LIVECATTLE_FUT, LEANHOG_FUT, FEEDERCATTLE_FUT,MILK_FUT]
-
-FUTS = AGRI_FUTS + MARKET_FUTS # + METALS_FUTS + ENERGY_FUTS
-
-TARGET_FUT=WHEAT_FUT
+DATA_PATH="./data"
 
 KF_COLS = ['SD','Z1', 'Z2', 'Filtered_X', 'KG_X', 'KG_Z1', 'KG_Z2'] # ['Z1', 'Z2', 'Filtered_X', 'Uncertainty', 'Residuals', 'KG_X', 'KG_Z1', 'KG_Z2']
 BB_COLS = ['MA', 'U','L'] # ['SB','SS','SBS','SSB', 'Unreal_Ret', 'MA','SD', 'U','L', '%B', 'X']
 SR_COLS = ["Support", "Resistance"] # ["PP", "S1", "R1", "S2", "R2", "Support", "Resistance"]
-MOM_COLS = ["TSMOM", "CONTRA"]
-MARKET_COLS = [f"{fut}_{col}" for col in StockFeat.list for fut in MARKET_FUTS]
-MARKET_COLS_EXT = [f"{fut}_{col}" for col in StockFeatExt.list for fut in MARKET_FUTS]
+MOM_COLS = ["TSMOM"]
+FUTS_COLS = [f"{idx}_{col}" for col in StockFeat.list for idx in FUTS]
+MARKET_COLS = [f"{idx}_{col}" for col in StockFeat.list for idx in MARKET_DX]
+MARKET_COLS_EXT = [f"{idx}_{col}" for col in StockFeatExt.list for idx in MARKET_DX]
 # We scale RAW column, the rest are percentages or log values.
-COLS_TO_SCALE = StockFeatExt.list + BB_COLS + SR_COLS + KF_COLS + MARKET_COLS
+COLS_TO_SCALE = StockFeat.list + BB_COLS + SR_COLS + KF_COLS + MARKET_COLS
 
 META_LABEL = "mr_label"
-ALL_FEATURES = KF_COLS + BB_COLS + SR_COLS + MOM_COLS + MARKET_COLS + StockFeatExt.list
+ALL_FEATURES = StockFeat.list + KF_COLS + BB_COLS + SR_COLS + MOM_COLS + MARKET_COLS + FUTS_COLS
 FEATURES_SELECTED = ['10Y_Barcount', '10Y_Spread', '10Y_Volume', '2YY_Spread', '2YY_Volume',
                     'CONTRA', 'Filtered_X', 'KG_X', 'KG_Z1', 'RTY_Spread', 'SD', 'Spread',
                     'TSMOM', 'VXM_Open', 'VXM_Spread', 'Volume']
 
+
+START_DATE = '2017-01-01'
+SPLIT_DATE = '2018-1-1' # Turning point from train to tst
+END_DATE = '2019-12-31'
+DATE_TIME_FORMAT = "%Y-%m-%d"
+INTERVAL = YFinanceOptions.D1
+
+
+## YFINANCE
+
+def get_yf_tickers_df(tickers_symbols, start, end, interval=INTERVAL, datadir=DATA_PATH):
+    tickers = {}
+    earliest_end= pd.to_datetime(datetime.strptime(end,YFinanceOptions.DATE_TIME_FORMAT)).tz_localize("UTC")
+    latest_start = pd.to_datetime(datetime.strptime(start,YFinanceOptions.DATE_TIME_FORMAT)).tz_localize("UTC")
+    os.makedirs(datadir, exist_ok=True)
+    for symbol in tickers_symbols:
+        cached_file_path = f"{datadir}/{symbol}-{start.split(' ')[0]}-{end.split(' ')[0]}-{interval}.csv"
+        print(f"Checking file: {cached_file_path}")
+        if os.path.exists(cached_file_path):
+            print(f"loading from {cached_file_path}")
+            df = pd.read_csv(cached_file_path, parse_dates= True, index_col=0)
+            try:
+                df.index = pd.to_datetime(df.index).tz_localize('US/Central').tz_convert('UTC')
+            except Exception as e:
+                df.index = pd.to_datetime(df.index).tz_convert('UTC')
+            assert len(df) > 0, "Empty data"
+        else:
+            df = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                progress=True,
+                interval=interval
+            )
+            assert len(df) > 0, "No data pulled"
+            try:
+                df.index = pd.to_datetime(df.index).tz_localize('US/Central').tz_convert('UTC')
+            except Exception as e:
+                df.index = pd.to_datetime(df.index).tz_convert('UTC')
+        # Use adjusted close if available.
+        if 'Adj Close' in df.columns:
+            assert 'Close' in df.columns
+            df.drop(columns=['Adj Close'], inplace=True)
+            # df.rename(columns={'Adj Close': 'Close'}, inplace=True)
+        min_date = df.index.min()
+        max_date = df.index.max()
+        nan_count = df["Close"].isnull().sum()
+        skewness = round(skew(df["Close"].dropna()), 2)
+        kurt = round(kurtosis(df["Close"].dropna()), 2)
+        outliers_count = (df["Close"] > df["Close"].mean() + (3 * df["Close"].std())).sum()
+        print(
+            f"{symbol} => min_date: {min_date}, max_date: {max_date}, kurt:{kurt}, skewness:{skewness}, outliers_count:{outliers_count},  nan_count: {nan_count}"
+        )
+        tickers[symbol] = df
+
+        if min_date > latest_start:
+            latest_start = min_date
+        if max_date < earliest_end:
+            earliest_end = max_date
+
+    nyse = mcal.get_calendar('CME_Agriculture')
+    schedule = nyse.schedule(start_date=latest_start, end_date=earliest_end)
+    all_trading_days = mcal.date_range(schedule, frequency=PERIOD_PD_FREQ[interval], tz='UTC', normalize=True)
+
+    for symbol, df in tickers.items():
+        df_filtered = df[(df.index >= latest_start) & (df.index <= earliest_end)]
+        df_reindexed = df_filtered.reindex(all_trading_days, method='nearest')
+        df_reindexed.index = pd.to_datetime(df_reindexed.index)
+        df_reindexed = df_reindexed[~df_reindexed.index.duplicated(keep='first')]
+        df_reindexed.index.name = 'Date'
+        df_reindexed = df_reindexed.bfill().ffill()
+        tickers[symbol] = df_reindexed
+
+        cached_file_path = f"{datadir}/{symbol}-{start.split(' ')[0]}-{end.split(' ')[0]}-{interval}.csv"
+        if not os.path.exists(cached_file_path):
+            df_reindexed.to_csv(cached_file_path, index=True)
+
+    return tickers, latest_start, earliest_end
+
+def load_all_csv_files(tickers_symbols, interval=INTERVAL, datadir=DATA_PATH):
+    tickers = {}
+    earliest_end = None
+    latest_start = None
+
+    for symbol in tickers_symbols:
+        symbol_path = os.path.join(datadir, symbol)
+        if os.path.isdir(symbol_path):
+            symbol_dfs = []
+            for root, _, files in os.walk(symbol_path):
+                for file_name in files:
+                    if file_name.endswith('.csv'):
+                        file_path = os.path.join(root, file_name)
+                        print(f"Loading {file_path}")
+                        df = pd.read_csv(file_path, parse_dates=True, index_col=0)
+                        try:
+                            df.index = pd.to_datetime(df.index).tz_localize('US/Central').tz_convert('UTC')
+                        except Exception as e:
+                            df.index = pd.to_datetime(df.index).tz_convert('UTC')
+                        df.columns = [f"{col.capitalize()}" for col in df.columns]
+                        symbol_dfs.append(df)
+            if symbol_dfs:
+                df = pd.concat(symbol_dfs).sort_index()
+                df = df[~df.index.duplicated(keep='first')]
+
+                min_date = df.index.min()
+                max_date = df.index.max()
+                nan_count = df["Close"].isnull().sum()
+                data_skew = round(skew(df["Close"].dropna()), 2)
+                data_kurtosis = round(kurtosis(df["Close"].dropna()), 2)
+                outliers_count = (df["Close"] > df["Close"].mean() + (3 * df["Close"].std())).sum()
+                print(
+                    f"{symbol} => min_date: {min_date}, max_date: {max_date}, kurtosis: {data_kurtosis}, skewness: {data_skew}, outliers_count: {outliers_count}, nan_count: {nan_count}"
+                )
+
+                df.index.name = 'Date'
+                tickers[symbol] = df
+
+                if latest_start is None or min_date > latest_start:
+                    latest_start = min_date
+                if earliest_end is None or max_date < earliest_end:
+                    earliest_end = max_date
+
+                cached_file_path = f"{datadir}/{symbol}-{interval}.csv"
+                df.to_csv(cached_file_path, index=True)
+
+    return tickers, latest_start, earliest_end
+
 ### FORMULAS
 
-def get_ou(df, col):
+def get_ou(df, col=StockFeat.CLOSE):
     log_prices = np.log(df[col])
 
     h, _, _ = compute_Hc(log_prices, kind='price', simplified=True)
@@ -160,7 +282,7 @@ def modulate_std (hurst, base_std=2.0, adjustment=0.5):
     else:
         return base_std
 
-def var_ratio(df, col, k=100):
+def var_ratio(df, col=StockFeat.CLOSE, k=100):
     # https://mingze-gao.com/posts/lomackinlay1988/#source-code
     log_prices = np.log(df[col])
 
@@ -242,7 +364,7 @@ def deflated_sharpe_ratio(SR, T, skew, kurt, SRs, N):
 
 ### SIGNALS
 
-def dynamic_support_resistance(price_df, target_col, high_col, low_col, initial_window_size=20, max_clusters=20):
+def dynamic_support_resistance(price_df, target_col=StockFeat.CLOSE, high_col=StockFeat.HIGH, low_col=StockFeat.LOW, initial_window_size=20, max_clusters=20):
     def find_optimal_clusters(data, max_clusters=150, min_clusters=2, max_no_improvement=5, sample_size=1000):
         def evaluate_clusters(n_clusters, data):
             km = MiniBatchKMeans(n_clusters=n_clusters, random_state=0, batch_size=(256 * NUM_CORES), max_no_improvement=max_no_improvement)
@@ -341,28 +463,34 @@ def dynamic_support_resistance(price_df, target_col, high_col, low_col, initial_
     df["Resistance"] = df["Resistance"].ffill()
     return df, dynamic_support, dynamic_resistance
 
-def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_threshold=1.5):
+def signal_tsmom(prices_df, lookback=252, decay_factor=0.94):
+    returns = prices_df.pct_change().fillna(0.0)
+
+    ex_ante_volatility = returns.ewm(span=int(2/(1-decay_factor)-1), adjust=False).std()
+    past_returns = prices_df.pct_change(periods=lookback).shift(1).fillna(0.0)
+    signals = np.sign(past_returns) / ex_ante_volatility
+
+    signals = signals.replace([np.inf, -np.inf], 0).fillna(0)
+
+    return signals
+
+def tsmom_backtest(df, period, target_col=StockFeat.CLOSE, lookback=20):
     df = df.copy()
     df['Closed'] = 0
     df['Position'] = 0
     df['Ret'] = 0.0
-    ts_mom_df = signal_tsmom(df[target_col], lookback=lookback, contra_lookback=contra_lookback, std_threshold=std_threshold)
-    df['TSMOM'] = ts_mom_df['TSMOM']
-    df['CONTRA'] = ts_mom_df['CONTRA']
-
-    df['TSMOM_Shifted'] = df['TSMOM'].shift(1).fillna(0)
-    df['CONTRA_Shifted'] = df['CONTRA'].shift(3).fillna(0)
-    df['SB'] = (df['TSMOM_Shifted'] > 0) & (df['CONTRA_Shifted'] == 0)
-    df['SS'] = (df['TSMOM_Shifted'] < 0) & (df['CONTRA_Shifted'] == 0)
-    df['SBS'] = df['TSMOM_Shifted'] < 1
-    df['SSB'] = df['TSMOM_Shifted'] > -1
-
+    df['TSMOM'] = np.sign(signal_tsmom(df[target_col], lookback=lookback))
+    df['SB'] = 0
+    df['SS'] = 0
+    df['SBS'] = 0
+    df['SSB'] = 0
     entry = 0
     position = 0
-    remove_signals = False
+
     # TODO: Vectorize this.
     for i, row in df.iterrows():
-        if (row['SBS'] and position == 1) or (row['SSB'] and position == -1):
+        if (row['TSMOM'] < 0 and position == 1) \
+            or (row['TSMOM'] > 0 and position == -1):
             if position == 1:
                 df.at[i, 'Ret'] = (row[target_col] - entry) / entry
                 df.at[i, 'Closed'] = 1
@@ -370,27 +498,20 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
                 df.at[i, 'Ret'] = (entry - row[target_col]) / entry
                 df.at[i, 'Closed'] = -1
             position = 0
-            remove_signals = False
-        if remove_signals:
-            # Just to make graphs clearer.
-            df.at[i, 'SB'] = False
-            df.at[i, 'SS'] = False
-            df.at[i, 'SBS'] = False
-            df.at[i, 'SSB'] = False
-        if row['SB'] and position == 0:
+        elif row['TSMOM'] > 0 and position == 0:
             entry = row[target_col]
+            df.at[i, 'SB'] = 1
             position = 1
-            remove_signals = True
-        elif row['SS'] and position == 0:
+        elif row['TSMOM'] < 0  and position == 0:
             entry = row[target_col]
+            df.at[i, 'SS'] = 1
             position = -1
-            remove_signals = True
-        if position != 0 and row['CONTRA'] != 0:
-            # THe contrarian policy, if the variance shows a breakdown of momentum.
-            position = -position
         df.at[i, 'Position'] = position
-
-    df['Ret'] = df['Position'] * df[target_col].pct_change().fillna(0)
+    if position != 0:
+        # Close the backtest.
+        assert entry != 0
+        df.at[df.index[-1], 'Closed'] = np.sign(position)
+        df.at[df.index[-1],  'Ret'] = (row[target_col] - entry) / entry if position == 1 else (entry - row[target_col]) / entry
     df['cRets'] = (1 + df['Ret']).cumprod() - 1
 
     variance = df['Ret'].var()
@@ -402,8 +523,6 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
 
     stats_df = pd.DataFrame({
         "Window": [lookback],
-        "Contrarian Window": [contra_lookback],
-        "STD Threshold": [std_threshold],
         "Cumulative_Returns": [df['cRets'].iloc[-1]],
         "Max Ret": [df['Ret'].max()],
         "Max Loss": [df['Ret'].min()],
@@ -423,16 +542,10 @@ def tsmom_backtest(df, target_col, period, lookback=20, contra_lookback=5, std_t
     return df, stats_df
 
 
-def param_search_tsmom(df, target_col, period, initial_window=20, window_factor = 1.5, window_min = 10, intial_std_threshold=1.5, hurst=0.5):
+def param_search_tsmom(df, period, target_col=StockFeat.CLOSE, initial_window=20, window_step = 2, window_min = 10):
     assert initial_window > 0 and initial_window > window_min, f"initial_window: {initial_window} > window_min: {window_min}"
 
-    num_steps = int(math.log(initial_window / window_min, window_factor)) + 1
-    windows = [int(initial_window // (window_factor**i)) for i in range(num_steps)]
-    contra_windows = [0, 3, window_min, initial_window//2] # in the paper they lookback 3 months (steps).
-    std_thresholds = [intial_std_threshold, intial_std_threshold + 0.5]
-
-    combinations = list(itertools.product(windows, contra_windows, std_thresholds))
-
+    windows = list(range(initial_window, window_min - 1, -window_step))
     best_sharpe = -float('inf')
     best_sharpe_stats = None
     best_rets = -float('inf')
@@ -441,11 +554,10 @@ def param_search_tsmom(df, target_col, period, initial_window=20, window_factor 
     best_mdd_stats = None
 
     sharpes = []
-    n_tests = len(combinations)
+    n_tests = len(windows)
 
-    for window, contra_window, std_threshold in tqdm(combinations, desc="param_search_tsmom"):
-        std_factor = modulate_std (hurst, intial_std_threshold, std_threshold)
-        _, stats_df = tsmom_backtest(df, target_col, period, lookback=window, contra_lookback=contra_window, std_threshold=std_factor)
+    for window in tqdm(windows, desc="param_search_tsmom"):
+        _, stats_df = tsmom_backtest(df, period=period, target_col=target_col, lookback=window)
 
         stat = stats_df['Sharpe'].iloc[0]
         sharpes.append(stat)
@@ -526,41 +638,36 @@ def signal_kf_bollinger_bands(price_df, volume_df, std_factor=2., kf_em_iters=5,
     return stats_df
 
 
-def signal_bollinger_bands(price_df, target_col, window, std_factor):
+def signal_bollinger_bands(price_df, window, std_factor=0.5, target_col=StockFeat.CLOSE):
     df = price_df[[target_col]].copy()
     df['MA'] = df[target_col].rolling(window=window).mean().bfill()
     df['SD'] = df[target_col].rolling(window=window).std().bfill()
     df['U'] = df['MA'] + (df['SD'] * std_factor)
     df['L'] = df['MA'] - (df['SD'] * std_factor)
-    df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L']) # %B Indicator signal
-
+    df['%B'] = (df[target_col] - df['L']) / (df['U'] - df['L'])
     return df
 
-def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5, stoploss_pct=0.5):
+def bollinger_band_backtest(price_df, window, period, target_col=StockFeat.CLOSE, std_factor=0.5):
     df = price_df.copy()
-    bb_df = signal_bollinger_bands(df, target_col, window, std_factor)
-
+    bb_df = signal_bollinger_bands(df, window=window, std_factor=std_factor, target_col=target_col)
     df['MA'] = bb_df['MA']
     df['SD'] = bb_df['SD']
     df['U'] = bb_df['U']
     df['L'] = bb_df['L']
-    df['SB'] = (df[target_col] < bb_df['L']).astype(int).diff().clip(0) * +1
-    df['SS'] = (df[target_col] > bb_df['U']).astype(int).diff().clip(0) * -1
-    df['SBS'] = (df[target_col] > bb_df['MA']).astype(int).diff().clip(0) * -1
-    df['SSB'] = (df[target_col] < bb_df['MA']).astype(int).diff().clip(0) * +1
+    df['%B'] = bb_df['%B']
     df['Closed'] = 0
     df['Position'] = 0
     df['Ret'] = 0.
+    df['SB'] = 0
+    df['SS'] = 0.
     entry = position = 0
-    remove_signals = False
+
     for i, row in df.iterrows():
         if df.index.get_loc(i) < window:
             # Signal doesnt have enough data.
             continue
-        if (row['SBS'] == -1 and position == 1) or \
-            (row['SSB'] == 1 and position == -1) or \
-            (position == 1 and row[target_col] <= row[target_col] - (stoploss_pct * entry)) or \
-            (position == -1 and row[target_col] >= row[target_col] + (stoploss_pct * entry)):
+        if (row['%B'] >= 0.5 and position == 1) or \
+            (row['%B'] <= 0.5 and position == -1):
             if position == 1:
                 df.loc[i, 'Ret'] = (row[target_col] - entry) / entry
                 df.loc[i, 'Closed'] = 1
@@ -568,22 +675,22 @@ def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5
                 df.loc[i, 'Ret'] = (entry - row[target_col]) / entry
                 df.loc[i, 'Closed'] = -1
             position = 0
-            remove_signals = False
-        if remove_signals:
-            # Just to make graphs clearer.
-            df.at[i, 'SB'] = False
-            df.at[i, 'SS'] = False
-            df.at[i, 'SBS'] = False
-            df.at[i, 'SSB'] = False
-
-        if (row['SB'] == 1 and position == 0) or (row['SS'] == -1 and position == 0):
+        elif (row['%B'] >= 1. and position == 0) or\
+            (row['%B'] <= 0. and position == 0):
             entry = row[target_col]
-            position = 1 if row['SB'] == 1 else -1
-            remove_signals = True
+            if row['%B'] <= 0.:
+                position = 1
+                df.loc[i, 'SB'] = 1
+            else:
+                position = -1
+                df.loc[i, 'SS'] = 1
         df.loc[i, 'Position'] = position
-        # TODO: add unrealized returns to check for DDs.
-
+    if position != 0:
+        # Close the backtest.
+        df.at[df.index[-1], 'Closed'] = np.sign(position)
+        df.at[df.index[-1],  'Ret'] = (row[target_col] - entry) / entry if position == 1 else (entry - row[target_col]) / entry
     df['cRets'] = (1 + df['Ret']).cumprod() - 1
+    df['Volatility'] = df[target_col].rolling(window=window).std().fillna(0.)
 
     variance = df['Ret'].var()
     df['Drawdown'] = (1 + df['Ret']).cumprod().div((1 + df['Ret']).cumprod().cummax()) - 1
@@ -594,7 +701,6 @@ def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5
     stats_df = pd.DataFrame({
         "Window": [window],
         "Standard_Factor": [std_factor],
-        "stoploss_pct": [stoploss_pct],
         "Cumulative_Returns": [df['cRets'].iloc[-1]],
         "Max Ret": [df['Ret'].max()],
         "Max Loss": [df['Ret'].min()],
@@ -613,11 +719,10 @@ def bollinger_band_backtest(price_df, target_col, window, period, std_factor=0.5
 
     return df, stats_df
 
-def param_search_bbs(df, target_col, period, stoploss_pct=0.1, initial_window=20, window_factor = 1.5, window_min = 4, hurst=0.5):
+def param_search_bbs(df, period, target_col=StockFeat.CLOSE, initial_window=20, window_step = 2, window_min = 4, hurst=0.5):
     assert initial_window > window_min
 
-    num_steps = int(math.log(initial_window / window_min, window_factor)) + 1
-    windows = [int(initial_window // (window_factor**i)) for i in range(num_steps)]
+    windows = list(range(initial_window, window_min - 1, -window_step))
     std_adjustments = [0.05, 0.25, 0.5]
     combinations = list(itertools.product(windows, std_adjustments))
 
@@ -633,7 +738,7 @@ def param_search_bbs(df, target_col, period, stoploss_pct=0.1, initial_window=20
 
     for window, adjustment in tqdm(combinations, desc="param_search_bbs"):
         std_factor = modulate_std (hurst, adjustment=adjustment)
-        _, stats_df = bollinger_band_backtest(df, target_col, window, period, std_factor=std_factor, stoploss_pct=stoploss_pct)
+        _, stats_df = bollinger_band_backtest(df,  window, period, target_col=target_col, std_factor=std_factor)
 
         stat = stats_df['Sharpe'].iloc[0]
         sharpes.append(stat)
@@ -712,7 +817,10 @@ def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stop
             remove_signals= True
         df.loc[i, 'Position'] = position
         # TODO: add unrealized returns to check for DDs.
-
+    if position != 0:
+        # Close the backtest.
+        df.at[df.index[-1], 'Closed'] = np.sign(position)
+        df.at[df.index[-1],  'Ret'] = (row['Close'] - entry) / entry if position == 1 else (entry - row['Close']) / entry
     df['cRets'] = (1 + df['Ret']).cumprod() - 1
 
     variance = df['Ret'].var()
@@ -794,24 +902,7 @@ def param_search_kf_bbs(price_df, volume_df, period, hurst):
 
     return results_df
 
-def signal_tsmom(prices_df, lookback, contra_lookback, std_threshold=2):
-    def get_auto_covariance(returns, window):
-        mean_returns = returns.rolling(window=window).mean()
-        auto_cov = (returns - mean_returns).rolling(window=window).apply(lambda x: np.mean((x - x.mean()) * (x.shift(1) - x.shift(1).mean())))
-        return auto_cov
 
-    returns = prices_df.pct_change().fillna(0.)
-    auto_cov = get_auto_covariance(returns, lookback).fillna(0.)
-
-    signals = (1 * np.sign(auto_cov)).astype(int)
-    contra_signal = 0
-    if contra_lookback > 0:
-        rolling_std = prices_df.rolling(window=contra_lookback).std()
-        contra_signal = (((signals > 0) & (rolling_std < -std_threshold)) | ((signals < 0) & (rolling_std > std_threshold))).astype(int)
-
-    signals_df = pd.DataFrame({'TSMOM': signals, 'CONTRA': contra_signal})
-
-    return signals_df
 
 
 def signal_kf(spread_df, volumes_df, price_df, em_train_perc=0.1, em_iter=5, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
@@ -896,6 +987,7 @@ def signal_kf(spread_df, volumes_df, price_df, em_train_perc=0.1, em_iter=5, del
 def kalman_backtest(spread_df, volumes_df, price_df, period, thresholds=[0, 0.5, 1], stoploss_pct=0.9, delta_t=1, q_t=1e-4/(1-1e-4), r_t=0.1):
     df = signal_kf(spread_df, volumes_df, price_df, delta_t=delta_t, q_t=q_t, r_t=r_t)
 
+
     df['SB'] = (df['Filtered_X'] <= thresholds[0]).astype(int).diff().clip(0) * +1
     df['SS'] = (df['Filtered_X'] >= thresholds[2]).astype(int).diff().clip(0) * -1
     df['SBS'] = (df['Filtered_X'] >= thresholds[1]).astype(int).diff().clip(0) * -1
@@ -925,7 +1017,10 @@ def kalman_backtest(spread_df, volumes_df, price_df, period, thresholds=[0, 0.5,
         if position != 0:
             # Unrealized for continuous returns tracking.
             df.loc[i, 'Unreal_Ret'] = (entry - row['Close']) / entry
-
+    if position != 0:
+        # Close the backtest.
+        df.at[df.index[-1], 'Closed'] = np.sign(position)
+        df.at[df.index[-1],  'Ret'] = (row['Close'] - entry) / entry if position == 1 else (entry - row['Close']) / entry
     df['cRets'] = (1 + df['Ret']).cumprod() - 1
 
     variance = df['Ret'].var()
@@ -1067,21 +1162,41 @@ def aug_metalabel_mr(df, metalabel = META_LABEL):
 
     return df
 
-def augment_ts(df, target_close, target_high, target_low, target_volume, interval):
-    hl, h = get_ou(df, target_close)
+def augment_ts(df, interval, train_df=None):
+    # not to leak data
+    hl, h = get_ou(df if train_df is None else train_df)
     window = abs(hl)
     mod_std = modulate_std(h)
 
-    mom_df, _ = tsmom_backtest(df, target_close, interval, int(window*2), contra_lookback=window//2, std_threshold=mod_std)
-    bb_df, _ = kf_bollinger_band_backtest(df[target_close], df[target_volume], interval, std_factor=mod_std)
-    sr_df, _, _ = dynamic_support_resistance(df, target_close, target_high, target_low, initial_window_size=window)
-    kf_df, _ = kalman_backtest(bb_df["%B"].bfill().ffill(), df[target_volume], df[target_close], period=interval)
+    mom_df, _ = tsmom_backtest(df, period=interval)
+    bb_df, _ = kf_bollinger_band_backtest(df[StockFeat.CLOSE], df[StockFeat.VOLUME], period=interval)
+    sr_df, _, _ = dynamic_support_resistance(df, StockFeat.CLOSE, StockFeat.HIGH, StockFeat.LOW, initial_window_size=window)
+    kf_df, _ = kalman_backtest(bb_df["%B"].bfill().ffill(), df[StockFeat.VOLUME], df[StockFeat.CLOSE], period=interval)
 
-    aug_ts_df = pd.concat([df[StockFeatExt.list], sr_df, kf_df, bb_df, mom_df], axis=1).bfill().ffill()
+    aug_ts_df = pd.concat([df[StockFeat.list], sr_df, kf_df, bb_df, mom_df], axis=1).bfill().ffill()
     aug_ts_df = aug_ts_df.loc[:, ~aug_ts_df.columns.duplicated(keep="first")]
 
     return aug_ts_df
 
+def process_exog(stocks, tickers):
+    futs_exog_ts = []
+    for ticker in tqdm(tickers, desc="process_exog"):
+        stock_df = stocks[ticker]
+        stock_df = stock_df.copy()
+        stock_df = stocks[ticker].copy()
+        stock_df = stock_df.rename(columns=lambda col: f"{ticker}_{col}")
+        futs_exog_ts.append(stock_df)
+
+    stock_exog_df = pd.concat(futs_exog_ts, axis=1)
+
+    return stock_exog_df
+
+def prepare_security_for_training(stock_df, stock_exog_df, train_size, interval):
+    stock_df = pd.concat([stock_df, stock_exog_df], axis=1)
+    train_df = augment_ts(stock_df.iloc[:train_size],  interval=interval)
+    test_df = augment_ts(stock_df.iloc[train_size:],  interval=interval)
+
+    return train_df, test_df
 def process_exog(futures, futs_df):
     futs_exog_ts = []
     for f in tqdm(futures, desc="process_exog"):
