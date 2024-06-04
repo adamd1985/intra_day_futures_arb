@@ -108,7 +108,7 @@ DATA_PATH="./data"
 
 # See EDA
 KF_COLS = ['SD','Z1', 'Z2', 'Filtered_X', 'KG_X', 'KG_Z1', 'KG_Z2'] # ['Z1', 'Z2', 'Filtered_X', 'Uncertainty', 'Residuals', 'KG_X', 'KG_Z1', 'KG_Z2']
-BB_COLS = ['MA', 'U','L'] # ['SB','SS','SBS','SSB', 'Unreal_Ret', 'MA','SD', 'U','L', '%B', 'X']
+BB_COLS = [ '%B','MA', 'U','L'] # ['SB','SS','SBS','SSB', 'Unreal_Ret', 'MA','SD', 'U','L', '%B', 'X']
 
 MOM_COLS = ["TSMOM"]
 FUTS_COLS = [f"{idx}_{col}" for col in StockFeat.list for idx in FUTS]
@@ -891,7 +891,7 @@ def signal_kf(spread_df, volumes_df, price_df, em_train_perc=0.1, em_iter=5, del
         'Z1': hidden_1,
         'Z2': hidden_2,
         'Filtered_X': filtered_state_means,
-        'Uncertainty': filtered_state_covariances,
+        'SD': filtered_state_covariances,
         'Residuals': residuals,
         'KG_X': [kg[0] for kg in kalman_gains],
         'KG_Z1': [kg[1] for kg in kalman_gains],
@@ -991,7 +991,7 @@ def param_search(X_train, y_train, X_test, y_test, class_weights):
         'n_estimators': [50, 100, 200],
         'subsample': [0.8, 0.9, 1.0],
         'colsample_bytree': [0.8, 0.9, 1.0],
-        'scale_pos_weight': [1, class_weights[1]]
+        'scale_pos_weight': [1, class_weights[1] if class_weights is not None else None]
     }
     folds = np.concatenate([np.zeros(len(X_train)), np.ones(len(X_test))])
     ps = PredefinedSplit(test_fold=folds)
@@ -1006,4 +1006,3 @@ def param_search(X_train, y_train, X_test, y_test, class_weights):
 
     best_model = grid_search.best_estimator_
     return best_model
-eturn training_ts, val_ts
