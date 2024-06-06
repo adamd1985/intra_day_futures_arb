@@ -1,4 +1,3 @@
-# %% [code]
 import pandas as pd
 import numpy as np
 import itertools
@@ -99,10 +98,100 @@ FUTS = METALS_FUTS + ENERGY_FUTS
 # Equities
 AAPL = "AAPL"
 TESLA = "TSLA"
-EQUITIES=[AAPL, TESLA]
+VOLATILE_TECH_STOCKS = [
+    TESLA,  # Tesla, Inc.
+    "NVDA",  # NVIDIA Corporation
+    "NFLX",  # Netflix, Inc.
+    "AMZN",  # Amazon.com, Inc.
+    "META",  # Meta Platforms, Inc. (formerly Facebook, Inc.)
+    AAPL,  # Apple Inc.
+    "AMD",   # Advanced Micro Devices, Inc.
+    "GOOGL", # Alphabet Inc. (Class A)
+    "MSFT",  # Microsoft Corporation
+    "INTC",  # Intel Corporation
+    "BIDU",  # Baidu, Inc.
+    "JD",    # JD.com, Inc.
+    "CSCO",  # Cisco Systems, Inc.
+    "AVGO",  # Broadcom Inc.
+    "ADBE",  # Adobe Inc.
+    "AMAT",  # Applied Materials, Inc.
+    "QCOM",  # Qualcomm Incorporated
+    "SBUX",  # Starbucks Corporation
+    "ISRG",  # Intuitive Surgical, Inc.
+    "VRTX",  # Vertex Pharmaceuticals Incorporated
+    "MU",    # Micron Technology, Inc.
+    "TXN",   # Texas Instruments Incorporated
+    "ILMN",  # Illumina, Inc.
+    "REGN",  # Regeneron Pharmaceuticals, Inc.
+    "PYPL",  # PayPal Holdings, Inc.
+    "BIIB",  # Biogen Inc.
+    "CTSH",  # Cognizant Technology Solutions Corporation
+    "KHC",   # The Kraft Heinz Company
+    "NTES",  # NetEase, Inc.
+    "BMRN",  # BioMarin Pharmaceutical Inc.
+    "NXPI",  # NXP Semiconductors N.V.
+    "WDC",   # Western Digital Corporation
+    "ROST",  # Ross Stores, Inc.
+    "IDXX",  # IDEXX Laboratories, Inc.
+    "MNST",  # Monster Beverage Corporation
+    "EXPE",  # Expedia Group, Inc.
+    "UAL"    # United Airlines Holdings, Inc.
+]
+VOLATILE_SNP = [
+    "AAL",  # American Airlines Group Inc.
+    "UAL",  # United Airlines Holdings, Inc.
+    "F",    # Ford Motor Company
+    "GM",   # General Motors Company
+    "GE",   # General Electric Company
+    "XOM",  # Exxon Mobil Corporation
+    "CVX",  # Chevron Corporation
+    "BA",   # The Boeing Company
+    "CAT",  # Caterpillar Inc.
+    "X",    # United States Steel Corporation
+    "FCX",  # Freeport-McMoRan Inc.
+    "MRO",  # Marathon Oil Corporation
+    "HES",  # Hess Corporation
+    "RIG",  # Transocean Ltd.
+    "NBR",  # Nabors Industries Ltd.
+    "NEM",  # Newmont Corporation
+    "GOLD", # Barrick Gold Corporation
+    "MO",   # Altria Group, Inc.
+    "PM",   # Philip Morris International Inc.
+    "T",    # AT&T Inc.
+    "VZ",   # Verizon Communications Inc.
+    "LUV",  # Southwest Airlines Co.
+    "DAL",  # Delta Air Lines, Inc.
+    "JBLU", # JetBlue Airways Corporation
+    "SAVE", # Spirit Airlines, Inc.
+    "ALK",  # Alaska Air Group, Inc.
+    "AFL",  # Aflac Incorporated
+    "C",    # Citigroup Inc.
+    "JPM",  # JPMorgan Chase & Co.
+    "GS",   # The Goldman Sachs Group, Inc.
+    "BAC",  # Bank of America Corporation
+    "MS",   # Morgan Stanley
+    "WFC",  # Wells Fargo & Company
+    "ALLY", # Ally Financial Inc.
+    "KEY",  # KeyCorp
+    "RF",   # Regions Financial Corporation
+    "FITB", # Fifth Third Bancorp
+    "HBAN", # Huntington Bancshares Incorporated
+    "CFG",  # Citizens Financial Group, Inc.
+    "ZION", # Zions Bancorporation, N.A.
+    "NYCB", # New York Community Bancorp, Inc.
+    "TFC",  # Truist Financial Corporation
+    "PFG",  # Principal Financial Group, Inc.
+    "LNC",  # Lincoln National Corporation
+    "UNM",  # Unum Group
+    "PRU",  # Prudential Financial, Inc.
+    "MET"   # MetLife, Inc.
+]
+EQUITIES= VOLATILE_TECH_STOCKS + VOLATILE_SNP
+
+MR_EQUITIES = ['KHC', 'PM', 'T', 'JD', 'VZ', 'XOM']
 
 # For yahoofinance, future tickers have =F flag.
-ALL_TICKERS = EQUITIES +FUTS+MARKET_DX
+ALL_TICKERS = EQUITIES + FUTS + MARKET_DX
 
 DATA_PATH="./data"
 
@@ -122,8 +211,9 @@ META_LABEL_RET = "META_LABEL_RET"
 META_LABEL_MR = "META_LABEL_MR"
 ALL_FEATURES = StockFeat.list + KF_COLS + BB_COLS + MOM_COLS + MARKET_COLS + FUTS_COLS
 FEATURES_SELECTED = ['RB=F_Volume', 'PA=F_Volume', 'HO=F_Volume', 'PL=F_Volume', 'NG=F_Volume', 'Volume', 'GC=F_Volume', '^NDX_Volume', 'Z2', 'TSMOM', 'CL=F_Volume']
-START_DATE = '2017-01-01'
-SPLIT_DATE = '2018-1-1' # Turning point from train to tst
+
+SPLIT_DATE = '2018-01-01' # Turning point from train to tst
+START_DATE = '2012-01-01'
 END_DATE = '2019-12-31'
 DATE_TIME_FORMAT = "%Y-%m-%d"
 INTERVAL = YFinanceOptions.D1
@@ -165,28 +255,21 @@ def get_yf_tickers_df(tickers_symbols, start, end, interval=INTERVAL, datadir=DA
             assert 'Close' in df.columns
             df.drop(columns=['Adj Close'], inplace=True)
             # df.rename(columns={'Adj Close': 'Close'}, inplace=True)
-        min_date = df.index.min()
-        max_date = df.index.max()
         nan_count = df["Close"].isnull().sum()
         skewness = round(skew(df["Close"].dropna()), 2)
         kurt = round(kurtosis(df["Close"].dropna()), 2)
         outliers_count = (df["Close"] > df["Close"].mean() + (3 * df["Close"].std())).sum()
         print(
-            f"{symbol} => min_date: {min_date}, max_date: {max_date}, kurt:{kurt}, skewness:{skewness}, outliers_count:{outliers_count},  nan_count: {nan_count}"
+            f"{symbol} => min_date: {start}, max_date: {end}, kurt:{kurt}, skewness:{skewness}, outliers_count:{outliers_count},  nan_count: {nan_count}"
         )
         tickers[symbol] = df
 
-        if min_date > latest_start:
-            latest_start = min_date
-        if max_date < earliest_end:
-            earliest_end = max_date
-
-    nyse = mcal.get_calendar('CME_Agriculture')
-    schedule = nyse.schedule(start_date=latest_start, end_date=earliest_end)
+    nyse = mcal.get_calendar('NYSE')
+    schedule = nyse.schedule(start_date=start, end_date=end)
     all_trading_days = mcal.date_range(schedule, frequency=PERIOD_PD_FREQ[interval], tz='UTC', normalize=True)
 
     for symbol, df in tickers.items():
-        df_filtered = df[(df.index >= latest_start) & (df.index <= earliest_end)]
+        df_filtered = df[(df.index >= start) & (df.index <= end)]
         df_reindexed = df_filtered.reindex(all_trading_days, method='nearest')
         df_reindexed.index = pd.to_datetime(df_reindexed.index)
         df_reindexed = df_reindexed[~df_reindexed.index.duplicated(keep='first')]
@@ -198,7 +281,7 @@ def get_yf_tickers_df(tickers_symbols, start, end, interval=INTERVAL, datadir=DA
         if not os.path.exists(cached_file_path):
             df_reindexed.to_csv(cached_file_path, index=True)
 
-    return tickers, latest_start, earliest_end
+    return tickers
 
 
 def clean_redundant_features(train_ts_df, test_ts_df, ALL_COLS, VIF_THRESHOLD = 5., DROP_COL = True):
@@ -236,7 +319,6 @@ def aug_metalabel_mr(df):
     df[META_LABEL_RET] = 0
     position = 0
     start_index = None
-    df[META_LABEL_MR] = 0
     for i, row in df.iterrows():
         if row['Closed'] != 0:
             # Position closed, work backwards
@@ -263,13 +345,17 @@ def augment_ts(df, interval, train_df=None):
 
     return aug_ts_df
 
-def process_exog(stocks, tickers):
+def process_exog(stocks, tickers, start_date=None, end_date=None):
     futs_exog_ts = []
     for ticker in tqdm(tickers, desc="process_exog"):
         stock_df = stocks[ticker]
         stock_df = stock_df.copy()
         stock_df = stocks[ticker].copy()
         stock_df = stock_df.rename(columns=lambda col: f"{ticker}_{col}")
+        if start_date is not None:
+            stock_df = stock_df[stock_df.index >= start_date].copy()
+        if end_date is not None:
+            stock_df = stock_df[stock_df.index <= end_date].copy()
         futs_exog_ts.append(stock_df)
 
     stock_exog_df = pd.concat(futs_exog_ts, axis=1)
