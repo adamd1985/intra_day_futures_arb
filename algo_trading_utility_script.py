@@ -1,4 +1,3 @@
-# %% [code]
 import pandas as pd
 import numpy as np
 import itertools
@@ -455,13 +454,13 @@ def get_annualized_factor(period=YFinanceOptions.M15):
         raise ValueError("Unsupported period.")
     return factor
 
-def calc_annualized_sharpe(rets, risk_free=0.035, period=YFinanceOptions.M15):
+def calc_annualized_sharpe(rets, risk_free_rate=2., period=YFinanceOptions.M15):
     mean_rets = rets.mean()
     std_rets = rets.std()
     factor = get_annualized_factor(period)
     sharpe_ratio = 0.
     if std_rets != 0:
-        sharpe_ratio = (mean_rets - (risk_free / factor)) / std_rets
+        sharpe_ratio = (mean_rets - (risk_free_rate / factor)) / std_rets
         sharpe_ratio *= np.sqrt(factor)
     return sharpe_ratio
 
@@ -480,14 +479,20 @@ def deflated_sharpe_ratio(SR, T, skew, kurt, SRs, N):
     DSR = norm.cdf(PSR)
     return DSR
 
+def calc_annualized_sortino(returns, period, risk_free_rate):
+    factor = get_annualized_factor(period)
+    downside_risk = np.sqrt(((returns[returns < 0])**2).mean()) * np.sqrt(factor)
+    return (returns.mean() * factor - risk_free_rate) / downside_risk
+
 
 ### SIGNALS, BACKTESTS AND METRICS
-
-def get_trade_metrics(df, period, risk_free_rate=1.5, market_index=None):
-    # Most of these portfolio metrics are inspired by AlphaLens
-    # Sharpe
+def get_trade_metrics(df, period, risk_free_rate=2., market_index=None):
+    # Sharpe Ratio
     variance = df['Ret'].var()
-    sharpe = calc_annualized_sharpe(df['Ret'], period=period)
+    sharpe = calc_annualized_sharpe(df['Ret'], period=period, risk_free_rate=risk_free_rate)
+
+    # Sortino
+    sortino = calc_annualized_sortino(df['Ret'], period=period, risk_free_rate=risk_free_rate)
 
     # Drawdown
     df['Drawdown'] = (1 + df['Ret']).cumprod().div((1 + df['Ret']).cumprod().cummax()) - 1
@@ -500,7 +505,7 @@ def get_trade_metrics(df, period, risk_free_rate=1.5, market_index=None):
     # Calculate Beta
     beta = None
     if market_index is not None:
-        market_index['Ret'] = pd.to_numeric(market_index[StockFeat.CLOSE].pct_change().fillna(0), errors='coerce').fillna(0)
+        market_index['Ret'] = pd.to_numeric(market_index['Close'].pct_change().fillna(0), errors='coerce').fillna(0)
         y = pd.to_numeric(df['Ret'], errors='coerce').fillna(0)
         X = sm.add_constant(market_index['Ret'].reset_index(drop=True))
         y = y.iloc[:len(X)].reset_index(drop=True)
@@ -517,28 +522,38 @@ def get_trade_metrics(df, period, risk_free_rate=1.5, market_index=None):
     # Calculate Trade Churn
     trade_churn = trades / len(df)
 
+    # Calculate Annualized Returns
+    cumulative_return = (np.cumprod(1 + df['Ret']) - 1).iloc[-1] if not df['Ret'].empty else 0
+    annualized_return = (1 + cumulative_return)**(factor / len(df)) - 1 if len(df) > 0 else 0
+
+    # Calculate Profitability Ratio
+    winning_trades = df[df['Ret'] > 0]['Ret']
+    profitability_ratio = (winning_trades.sum() / len(df)) * 100
+
     stats_df = pd.DataFrame({
-        "Cumulative_Returns": [(np.cumprod(1 + df['Ret']) - 1).values[-1]],
-        "Max Ret": [df['Ret'].max()],
-        "Max Loss": [df['Ret'].min()],
+        "Cumulative Returns": [cumulative_return],
+        "Annualized Returns": [annualized_return],
+        "Maximum Return": [df['Ret'].max()],
+        "Maximum Loss": [df['Ret'].min()],
         "Variance": [variance],
-        "STD": [np.sqrt(variance)],
-        "Max_Drawdown": [max_drawdown],
-        "Drawdown_Length": [drawdown_length],
-        "Sharpe": [sharpe],
-        "Trades_Count": [trades],
-        "Trades_per_Interval": [trades / len(df)],
-        "Trading_Intervals": [len(df)],
-        "Rets": [df['Ret'].to_numpy()],
-        "Rets_Skew": [skew(df['Ret'].to_numpy())],
-        "Rets_Kurt": [kurtosis(df['Ret'].to_numpy())],
+        "Standard Deviation": [np.sqrt(variance)],
+        "Maximum Drawdown": [max_drawdown],
+        "Drawdown Length": [drawdown_length],
+        "Sharpe Ratio": [sharpe],
+        "Sortino Ratio": [sortino],
+        "Number of Trades": [trades],
+        "Trades per Interval": [trades / len(df)],
+        "Number of Intervals": [len(df)],
+        "Returns": [df['Ret'].to_numpy()],
+        "Returns Skewness": [skew(df['Ret'].to_numpy())],
+        "Returns Kurtosis": [kurtosis(df['Ret'].to_numpy())],
         "Beta": [beta],
-        "Information_Ratio": [information_ratio],
-        "Trade_Churn": [trade_churn],
+        "Information Ratio": [information_ratio],
+        "Trade Churn": [trade_churn],
+        "Profitability Ratio [%]": [profitability_ratio],
     })
 
     return stats_df
-
 def signal_tsmom(prices_df, lookback=252, decay_factor=0.94):
     returns = prices_df.pct_change().fillna(0.0)
 
@@ -612,32 +627,32 @@ def param_search_tsmom(df, period, target_col=StockFeat.CLOSE, initial_window=20
     for window in tqdm(windows, desc="param_search_tsmom"):
         _, stats_df = tsmom_backtest(df, period=period, target_col=target_col, lookback=window, market_index=market_index)
 
-        stat = stats_df['Sharpe'].iloc[0]
+        stat = stats_df['Sharpe Ratio'].iloc[0]
         sharpes.append(stat)
         if stat > best_sharpe:
             best_sharpe = stat
             best_sharpe_stats = stats_df.copy()
 
-        stat = stats_df['Cumulative_Returns'].iloc[0]
+        stat = stats_df['Cumulative Returns'].iloc[0]
         if stat > best_rets:
             best_rets = stat
             best_rets_stats = stats_df.copy()
 
-        stat = stats_df['Max_Drawdown'].iloc[0]
+        stat = stats_df['Maximum Drawdown'].iloc[0]
         if stat > best_mdd:
             best_mdd = stat
             best_mdd_stats = stats_df.copy()
 
     # We're datamining, we need to deflated the sharpe!
     for df in [best_sharpe_stats, best_rets_stats, best_mdd_stats]:
-        df['Sharpe'] = deflated_sharpe_ratio(df['Sharpe'].iloc[0],
-                                            len(df['Rets'].iloc[0]),
-                                            df['Rets_Skew'].iloc[0],
-                                            df['Rets_Kurt'].iloc[0],
+        df['Sharpe Ratio'] = deflated_sharpe_ratio(df['Sharpe Ratio'].iloc[0],
+                                            len(df['Returns'].iloc[0]),
+                                            df["Returns Skewness"].iloc[0],
+                                            df["Returns Kurtosis"].iloc[0],
                                             sharpes,
                                             n_tests)
 
-    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe'),
+    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe Ratio'),
                             best_rets_stats.assign(Metric='Cumulative Returns'),
                             best_mdd_stats.assign(Metric='Max Drawdown')],
                            ignore_index=True)
@@ -769,39 +784,39 @@ def param_search_bbs(df, period, target_col=StockFeat.CLOSE, initial_window=20, 
         std_factor = modulate_std (hurst, adjustment=adjustment)
         _, stats_df = bollinger_band_backtest(df,  window, period, target_col=target_col, std_factor=std_factor, market_index=market_index)
 
-        stat = stats_df['Sharpe'].iloc[0]
+        stat = stats_df['Sharpe Ratio'].iloc[0]
         sharpes.append(stat)
         if stat > best_sharpe:
             best_sharpe = stat
             best_sharpe_stats = stats_df.copy()
 
-        stat = stats_df['Cumulative_Returns'].iloc[0]
+        stat = stats_df['Cumulative Returns'].iloc[0]
         if stat > best_rets:
             best_rets = stat
             best_rets_stats = stats_df.copy()
 
-        stat = stats_df['Max_Drawdown'].iloc[0]
+        stat = stats_df['Maximum Drawdown'].iloc[0]
         if stat > best_mdd:
             best_mdd = stat
             best_mdd_stats = stats_df.copy()
 
     # We're datamining, we need to deflated the sharpe!
     for df in [best_sharpe_stats, best_rets_stats, best_mdd_stats]:
-        df['Sharpe'] = deflated_sharpe_ratio(df['Sharpe'].iloc[0],
-                                            len(df['Rets'].iloc[0]),
-                                            df['Rets_Skew'].iloc[0],
-                                            df['Rets_Kurt'].iloc[0],
+        df['Sharpe Ratio'] = deflated_sharpe_ratio(df['Sharpe Ratio'].iloc[0],
+                                            len(df['Returns'].iloc[0]),
+                                            df["Returns Skewness"].iloc[0],
+                                            df["Returns Kurtosis"].iloc[0],
                                             sharpes,
                                             n_tests)
 
-    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe'),
+    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe Ratio'),
                             best_rets_stats.assign(Metric='Cumulative Returns'),
                             best_mdd_stats.assign(Metric='Max Drawdown')],
                            ignore_index=True)
 
     return results_df
 
-def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stoploss_pct=0.9, t_max=0.1 , risk_free_rate=1.5, market_index=None):
+def kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=0.5, stoploss_pct=0.9, t_max=0.1 , risk_free_rate=2., market_index=None):
     df = price_df.copy()
     bb_df = signal_kf_bollinger_bands(price_df, volume_df, std_factor, t_max=t_max)
 
@@ -876,32 +891,32 @@ def param_search_kf_bbs(price_df, volume_df, period, hurst, market_index=None):
         std_factor = modulate_std(hurst, adjustment=adjustment)
         _, stats_df = kf_bollinger_band_backtest(price_df, volume_df, period, std_factor=std_factor, t_max=t_max, market_index=market_index)
 
-        stat = stats_df['Sharpe'].iloc[0]
+        stat = stats_df['Sharpe Ratio'].iloc[0]
         sharpes.append(stat)
         if stat > best_sharpe:
             best_sharpe = stat
             best_sharpe_stats = stats_df.copy()
 
-        stat = stats_df['Cumulative_Returns'].iloc[0]
+        stat = stats_df['Cumulative Returns'].iloc[0]
         if stat > best_rets:
             best_rets = stat
             best_rets_stats = stats_df.copy()
 
-        stat = stats_df['Max_Drawdown'].iloc[0]
+        stat = stats_df['Maximum Drawdown'].iloc[0]
         if stat > best_mdd:
             best_mdd = stat
             best_mdd_stats = stats_df.copy()
 
     # We're datamining, we need to deflated the sharpe!
     for df in [best_sharpe_stats, best_rets_stats, best_mdd_stats]:
-        df['Sharpe'] = deflated_sharpe_ratio(df['Sharpe'].iloc[0],
-                                            len(df['Rets'].iloc[0]),
-                                            df['Rets_Skew'].iloc[0],
-                                            df['Rets_Kurt'].iloc[0],
+        df['Sharpe Ratio'] = deflated_sharpe_ratio(df['Sharpe Ratio'].iloc[0],
+                                            len(df['Returns'].iloc[0]),
+                                            df["Returns Skewness"].iloc[0],
+                                            df["Returns Kurtosis"].iloc[0],
                                             sharpes,
                                             n_tests)
 
-    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe'),
+    results_df = pd.concat([best_sharpe_stats.assign(Metric='Sharpe Ratio'),
                             best_rets_stats.assign(Metric='Cumulative Returns'),
                             best_mdd_stats.assign(Metric='Max Drawdown')],
                            ignore_index=True)
