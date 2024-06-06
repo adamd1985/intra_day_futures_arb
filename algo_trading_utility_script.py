@@ -210,7 +210,7 @@ COLS_TO_SCALE = StockFeat.list + BB_COLS  + KF_COLS + MARKET_COLS
 META_LABEL_RET = "META_LABEL_RET"
 META_LABEL_MR = "META_LABEL_MR"
 ALL_FEATURES = StockFeat.list + KF_COLS + BB_COLS + MOM_COLS + MARKET_COLS + FUTS_COLS
-FEATURES_SELECTED = ['RB=F_Volume', 'PA=F_Volume', 'HO=F_Volume', 'PL=F_Volume', 'NG=F_Volume', 'Volume', 'GC=F_Volume', '^NDX_Volume', 'Z2', 'TSMOM', 'CL=F_Volume']
+FEATURES_SELECTED = ['NG=F_Volume', 'HO=F_Volume', 'Close', 'GC=F_Volume', 'Volume', 'TSMOM', 'Low', 'Z2', 'KG_Z1', 'RB=F_Volume', '^NDX_Volume', 'KG_Z2', 'CL=F_Volume', 'Open', 'High', 'SD', 'Z1', 'Filtered_X', 'KG_X', 'PL=F_Volume', 'PA=F_Volume']
 
 SPLIT_DATE = '2018-01-01' # Turning point from train to tst
 START_DATE = '2012-01-01'
